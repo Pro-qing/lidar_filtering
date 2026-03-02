@@ -33,12 +33,12 @@
 
     <!-- fushi一号车 补盲TF参数 -->
     
-    <arg name="top_x" default="0.07" />  
+    <!-- <arg name="top_x" default="0.07" />  
     <arg name="top_y" default="-0.06" /> 
     <arg name="top_z" default="-0.23" />
     <arg name="top_yaw" default="0.04" /> 
     <arg name="top_pitch" default="-0.01" /> 
-    <arg name="top_roll" default="-3.11" />
+    <arg name="top_roll" default="-3.11" /> -->
 
     <!-- fushi二号车 补盲TF参数 -->
 <!--     
@@ -49,7 +49,14 @@
     <arg name="top_pitch" default="-0.01" /> 
     <arg name="top_roll" default="-3.11" /> -->
 
-
+    <!-- fushi测试车辆数据 补盲TF参数 -->
+    
+    <arg name="top_x" default="-0.02" />  
+    <arg name="top_y" default="-0.01" /> 
+    <arg name="top_z" default="-0.23" />
+    <arg name="top_yaw" default="-0.03" /> 
+    <arg name="top_pitch" default="-0.01" /> 
+    <arg name="top_roll" default="-3.11" />
 
     <arg name="left_x" default="0.25" /> 
     <arg name="left_y" default="0.35" /> 
