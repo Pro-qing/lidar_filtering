@@ -20,54 +20,51 @@
 ├── src/                # 核心源代码 (node.cpp & filter_core.cpp)
 ├── CMakeLists.txt      # 编译脚本
 └── package.xml         # ROS 包元数据与依赖声明
-
 3. 安装依赖
 
 在编译前，请确保安装了以下核心依赖：
 
+    PCL Version: >= 1.10
+
+Bash
+
 sudo apt-get update
 sudo apt-get install ros-$ROS_DISTRO-pcl-ros \
                      ros-$ROS_DISTRO-pcl-conversions \
                      ros-$ROS_DISTRO-dynamic-reconfigure
-
-pcl-version: PCL-1.10
 
 4. 编译与运行指南
-
 4.1 编译
 
-建议使用 colcon build：
+在 ROS1 工作空间根目录下执行：
+Bash
 
-```bash
-sudo apt-get update
-sudo apt-get install ros-$ROS_DISTRO-pcl-ros \
-                     ros-$ROS_DISTRO-pcl-conversions \
-                     ros-$ROS_DISTRO-dynamic-reconfigure
+cd ~/catkin_ws
+catkin_make -DCATKIN_WHITELIST_PACKAGES="lidar_filtering"
+source devel/setup.bash
 
 4.2 运行
 
 启动滤波主节点：
+Bash
 
-```bash
 roslaunch lidar_filtering lidar_filtering.launch
 
 4.3 动态参数调试
 
 在节点运行过程中，可以使用可视化界面实时调整参数：
+Bash
 
-```bash
 rosrun rqt_reconfigure rqt_reconfigure
 
 5. 参数说明 (params/vehicle_size.yaml)
 
 本项目通过 YAML 文件定义过滤区域（单位：米）：
-
-参数名称,类型,说明
-min_x,double,车辆坐标系下，向前的最小裁剪距离
-max_x,double,车辆坐标系下，向前的最大裁剪距离
-min_y,double,车辆坐标系下，向左的最小裁剪距离
-max_y,double,车辆坐标系下，向左的最大裁剪距离
-
+参数名称	类型	说明
+min_x	double	车辆坐标系下，向前的最小裁剪距离
+max_x	double	车辆坐标系下，向前的最大裁剪距离
+min_y	double	车辆坐标系下，向左的最小裁剪距离
+max_y	double	车辆坐标系下，向左的最大裁剪距离
 6. 开发状态记录 (Roadmap)
 
     [x] v1.0: 基础滤波框架构建，支持 PCL 裁剪。
@@ -82,4 +79,4 @@ max_y,double,车辆坐标系下，向左的最大裁剪距离
 
 7. 维护者
 
-    Pro-qing - [GitHub Profile](https://github.com/Pro-qing)
+    Pro-qing - GitHub Profile
