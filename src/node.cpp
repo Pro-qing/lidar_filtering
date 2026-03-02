@@ -522,7 +522,7 @@ int main(int argc, char **argv) {
     sync.registerCallback(boost::bind(&callback, _1, _2, _3, _4));
 
     ROS_INFO("Lidar Filtering Node Started with Charging Station Polygon Publisher.");
-    ros::MultiThreadedSpinner spinner(4);
+    ros::MultiThreadedSpinner spinner(2);
     spinner.spin();
     return 0;
 }
