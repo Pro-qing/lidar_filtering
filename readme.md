@@ -29,38 +29,37 @@
 3. 安装依赖
 
 在编译前，请确保安装了以下核心依赖（推荐 PCL 版本 >= 1.10）：
-Bash
-
+```bash
 sudo apt-get update
 sudo apt-get install ros-$ROS_DISTRO-pcl-ros \
                      ros-$ROS_DISTRO-pcl-conversions \
                      ros-$ROS_DISTRO-dynamic-reconfigure
-
+```
 
 4. 编译与运行指南
 4.1 编译
 
 在 ROS1 工作空间根目录下执行：
 Bash
-
+```bash
 cd ~/catkin_ws
 catkin_make -DCATKIN_WHITELIST_PACKAGES="lidar_filtering"
 source devel/setup.bash
-
+```
 4.2 运行
 
 启动滤波主节点：
-Bash
+```Bash
 
 roslaunch lidar_filtering lidar_filtering.launch
-
+```
 4.3 动态参数调试
 
 在节点运行过程中，可以使用可视化界面实时调整参数：
-Bash
+```Bash
 
 rosrun rqt_reconfigure rqt_reconfigure
-
+```
 
 5. 参数说明 (params/vehicle_size.yaml)
 
