@@ -413,9 +413,16 @@ void callback(const sensor_msgs::PointCloud2::ConstPtr &msg_16,
     }
 
     auto publish = [&](ros::Publisher& pub, const pcl::PointCloud<pcl::PointXYZI>::Ptr& cloud) {
-        if (pub.getNumSubscribers() > 0 && cloud && !cloud->empty()) {
-            sensor_msgs::PointCloud2 msg; pcl::toROSMsg(*cloud, msg);
-            msg.header = msg_16->header; msg.header.frame_id = parent_frame_; pub.publish(msg);
+        if (pub.getNumSubscribers() > 0 && cloud) { 
+            // 删除了 !cloud->empty() 的判断
+            sensor_msgs::PointCloud2 msg; 
+            pcl::toROSMsg(*cloud, msg);
+            
+            // 确保即使点云为空，Header 也是正确的
+            msg.header = msg_16->header; 
+            msg.header.frame_id = parent_frame_; 
+            
+            pub.publish(msg);
         }
     };
 
