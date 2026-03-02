@@ -1,0 +1,27 @@
+<?xml version="1.0"?>
+<package format="2">
+  <name>lidar_filtering</name>
+  <version>0.0.1</version>
+  <description>Multi-Lidar Calibration and Filtering Package</description>
+  <maintainer email="getq@todo.todo">User</maintainer>
+  <license>MIT</license>
+
+  <buildtool_depend>catkin</buildtool_depend>
+  <depend>roscpp</depend>
+  <depend>sensor_msgs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>std_msgs</depend>
+  <depend>pcl_ros</depend>
+  <depend>pcl_conversions</depend>
+  <depend>message_filters</depend>
+  <depend>tf</depend>
+  <depend>tf2</depend>
+  <depend>tf2_ros</depend>
+  <depend>tf2_geometry_msgs</depend>
+  <depend>laser_geometry</depend>
+  <depend>dynamic_reconfigure</depend>
+  <!-- 如果没有 autoware_msgs 可以注释掉相关代码，或者安装依赖 -->
+  <depend>autoware_msgs</depend>
+  <depend>autoware_can_msgs</depend>
+  <depend>visualization_msgs</depend>
+</package>

@@ -1,0 +1,167 @@
+<launch>
+    <!-- 基础参数 -->
+    <arg name="parent_frame" default="velodyne" />
+    
+    <!-- 调试开启选项 -->
+    <arg name="debug_mode" default="true" /> 
+
+    <!-- 输入话题 (Input) -->
+    <arg name="in_main" default="/points_16" />
+    <arg name="in_mid" default="/points_mid" />
+    <arg name="in_left" default="/scan_left" />
+    <arg name="in_right" default="/scan_right" />
+    <!-- <arg name="flag_scan" default="/lqr_targetwayp "> -->
+
+    <!-- 过滤后输出话题 (Filtered Output) -->
+    <arg name="out_filter_main" default="/points_16_filter" />
+    <arg name="out_filter_mid" default="/points_mid_filter" />
+    <arg name="out_filter_left" default="/scan_left_filter" />
+    <arg name="out_filter_right" default="/scan_right_filter" />
+
+    <!-- 标定调试话题 (Calibration Output) -->
+    <arg name="out_calib_mid" default="/points_mid_calibration" />
+    <arg name="out_calib_left" default="/points_left_calibration" />
+    <arg name="out_calib_right" default="/points_right_calibration" />
+
+    <!-- 标定参数默认值 (根据实际情况修改) -->
+    <arg name="main_x" default="0.0" /> 
+    <arg name="main_y" default="0.0" /> 
+    <arg name="main_z" default="0.0" />
+    <arg name="main_yaw" default="0.0" /> 
+    <arg name="main_pitch" default="0.0" /> 
+    <arg name="main_roll" default="0.0" />
+
+    <!-- fushi一号车 补盲TF参数 -->
+    
+    <arg name="top_x" default="0.07" />  
+    <arg name="top_y" default="-0.06" /> 
+    <arg name="top_z" default="-0.23" />
+    <arg name="top_yaw" default="0.04" /> 
+    <arg name="top_pitch" default="-0.01" /> 
+    <arg name="top_roll" default="-3.11" />
+
+    <!-- fushi二号车 补盲TF参数 -->
+<!--     
+    <arg name="top_x" default="0.12" />  
+    <arg name="top_y" default="-0.01" /> 
+    <arg name="top_z" default="-0.23" />
+    <arg name="top_yaw" default="-0.03" /> 
+    <arg name="top_pitch" default="-0.01" /> 
+    <arg name="top_roll" default="-3.11" /> -->
+
+
+
+    <arg name="left_x" default="0.25" /> 
+    <arg name="left_y" default="0.35" /> 
+    <arg name="left_z" default="-1.8" />
+    <arg name="left_yaw" default="-0.54" /> 
+    <arg name="left_pitch" default="3.1415926" /> 
+    <arg name="left_roll" default="0.0" />
+
+    <arg name="right_x" default="0.19" /> 
+    <arg name="right_y" default="-0.40" /> 
+    <arg name="right_z" default="-1.8" />
+    <arg name="right_yaw" default="0.54" /> 
+    <arg name="right_pitch" default="3.1415926" /> 
+    <arg name="right_roll" default="0.0" />
+
+    <!-- 单线雷达角度过滤参数
+    右雷达：保留 0 - 180° 和 340° - 360° 数据
+    左雷达：保留 0 - 20° 和 180° - 360° 数据
+    -->
+    <arg name="right_a" default="190" /> 
+    <arg name="right_b" default="360" /> 
+    <arg name="right_c" default="0" />
+    <arg name="right_d" default="0" /> 
+
+    <arg name="left_a" default="0" /> 
+    <arg name="left_b" default="190" /> 
+    <arg name="left_c" default="340" />
+    <arg name="left_d" default="360" /> 
+
+    <!-- 1. 解决粘连：减小体素大小 -->
+    <!-- 之前是 0.05，改回 0.03 或者 0.02 -->
+    <!-- <param name="voxel_filter" value="0.03" /> -->
+
+    <!-- 2. 解决噪点：开启半径滤波并加强参数 -->
+    <!-- <param name="radius_enble" value="true" /> -->
+    <!-- 半径改小一点，只看局部 -->
+    <!-- <param name="radius_radius" value="0.2" />  -->
+    <!-- 邻居数改大一点，要求更密集才保留 -->
+    <!-- <param name="radius_min_neighbors" value="4" /> -->
+
+    <node pkg="lidar_filtering" name="multi_points" type="multi_points" output="screen" >
+        <rosparam file="$(find lidar_filtering)/params/vehicle_size.yaml" command="load"/>
+        <param name="parent_frame" value="$(arg parent_frame)" />
+        
+        <!-- 环境过滤参数 -->
+        <param name="height_max" value="0.0" />
+        <!-- 高度过滤 -->
+        <param name="height_min" value="-1.80" />
+        <param name="height_filt" value="-5.0" />
+        <param name="filter_floor" value="true" />
+
+        <param name="right_a" value="$(arg right_a)" />
+        <param name="right_b" value="$(arg right_b)" />
+        <param name="right_c" value="$(arg right_c)" />
+        <param name="right_d" value="$(arg right_d)" />
+
+        <param name="left_a" value="$(arg left_a)" />
+        <param name="left_b" value="$(arg left_b)" />
+        <param name="left_c" value="$(arg left_c)" />
+        <param name="left_d" value="$(arg left_d)" />
+
+        <!-- 传入标定参数 -->
+        <param name="main_x" value="$(arg main_x)" /> 
+        <param name="main_y" value="$(arg main_y)" /> 
+        <param name="main_z" value="$(arg main_z)" />
+        <param name="main_yaw" value="$(arg main_yaw)" /> 
+        <param name="main_pitch" value="$(arg main_pitch)" /> 
+        <param name="main_roll" value="$(arg main_roll)" />
+        
+        <param name="top_x" value="$(arg top_x)" /> 
+        <param name="top_y" value="$(arg top_y)" /> 
+        <param name="top_z" value="$(arg top_z)" />
+        <param name="top_yaw" value="$(arg top_yaw)" /> 
+        <param name="top_pitch" value="$(arg top_pitch)" /> 
+        <param name="top_roll" value="$(arg top_roll)" />
+
+        <param name="left_x" value="$(arg left_x)" /> 
+        <param name="left_y" value="$(arg left_y)" /> 
+        <param name="left_z" value="$(arg left_z)" />
+        <param name="left_yaw" value="$(arg left_yaw)" /> 
+        <param name="left_pitch" value="$(arg left_pitch)" /> 
+        <param name="left_roll" value="$(arg left_roll)" />
+
+        <param name="right_x" value="$(arg right_x)" /> 
+        <param name="right_y" value="$(arg right_y)" /> 
+        <param name="right_z" value="$(arg right_z)" />
+        <param name="right_yaw" value="$(arg right_yaw)" /> 
+        <param name="right_pitch" value="$(arg right_pitch)" /> 
+        <param name="right_roll" value="$(arg right_roll)" />
+
+        <!-- 调试开启参数 -->
+        <param name="debug_mode" value="$(arg debug_mode)" />
+        
+        <!-- 话题重映射 -->
+        <!-- Inputs -->
+        <remap from="/points_16" to="$(arg in_main)" />
+        <remap from="/points_mid" to="$(arg in_mid)" />
+        <remap from="/scan_left" to="$(arg in_left)" />
+        <remap from="/scan_right" to="$(arg in_right)" />
+        <!-- <remap from="/lqr_targetwayp " to="$(arg in_flag_scan)" /> -->
+
+        <!-- Outputs: Filtered -->
+        <remap from="points_16_filter" to="$(arg out_filter_main)" />
+        <remap from="points_mid_filter" to="$(arg out_filter_mid)" />
+        <remap from="scan_left_filter" to="$(arg out_filter_left)" />
+        <remap from="scan_right_filter" to="$(arg out_filter_right)" />
+
+        <!-- Outputs: Calibration -->
+        <remap from="points_mid_calibration" to="$(arg out_calib_mid)" />
+        <remap from="scan_left_calibration" to="$(arg out_calib_left)" />
+        <remap from="scan_right_calibration" to="$(arg out_calib_right)" />
+    </node>
+</launch>
+
+

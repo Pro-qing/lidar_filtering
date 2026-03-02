@@ -1,0 +1,83 @@
+# 格式版本: 1.0
+# vehicle_size.yaml
+
+crop_radius: 8.0  #最大过滤范围
+crop_radius_x: 5.0  #最大过滤范围x轴前后误差
+
+# height_max: 0.1  #最大高度
+height_min: -3.0 #最小高度
+
+voxel_filter: 0.1    #体素滤波下采样精度
+voxel_filter_auto: false  #自动体素滤波下采样精度（会根据点云密集程度自动过滤防止CPU过高）
+voxel_filter_eleva: 0.1      #进电梯体素过滤体素滤波下采样精度
+# filter_floor: true   #过滤地面
+angle_error: 10.0    #增大角度误差，提高分割速度
+dis_threshold: 0.1  #增大距离阈值，提高分割速度
+# height_filt: -0.0  # 保持负值确保所有点云都经过处理  
+
+filter_transient: true   #噪点过滤使能
+neighboring_points: 10  #减少邻近点数，提高速度
+stand_threshold: 0.8      #增大标准差阈值，减少过滤点数
+radius_enble: true       #关闭半径过滤，节省时间
+radius_radius: 0.15
+radius_min_neighbors: 2
+time_consistency_filter: true  #保持关闭时间一致性滤波
+transient_threshold_: 0.3   #时间一致性滤波/距离阈值(米)
+
+# 拖拽点过滤参数
+filter_drag_points: true   #拖拽点过滤使能
+drag_cluster_tolerance: 0.03   #聚类容差(米)，同一簇内点的最大距离
+drag_min_cluster_size: 10   #最小聚类点数，小于此数目的簇被忽略
+drag_max_cluster_size: 25   #最大聚类点数，大于此数目的簇可能是大型障碍物
+drag_aspect_ratio_threshold: 1.0   #长宽比阈值，确保是细长形状
+drag_min_length: 0.01   #最小长度(米)，排除过小的点集
+drag_max_width: 0.15   #最大宽度(米)，确保不是宽大的障碍物
+drag_isolation_radius: 0.05   #孤立性判断半径(米)，用于判断簇的独立性
+drag_max_nearby_clusters: 5   #周围最大簇数，确保是独立的而不是大型障碍物的一部分
+
+enble_trans: false  #是否进行坐标转换
+trans:              #转换单位米和弧度
+    - {x: 0.0, y: 0.3, z: 0.0, yaw: 1.57, pitch: 0.0, roll: 3.1415926}
+
+# 优化参数
+use_openmp: true          # 启用OpenMP多线程加速
+use_simd: true            # 启用SIMD指令集优化（AVX2/SSE2）
+# enable_profiling: false   # 启用性能分析，输出各阶段耗时
+debug_mode: true         # 调试模式，输出额外信息
+
+
+# 车辆大小矩形各个点的位置(按顺序连接)
+# 车辆大小矩形各个点的位置(按顺序连接)
+rect:
+  - {x: 0.46, y: -0.20}
+  - {x: 0.40, y: -0.48}
+  - {x: -0.10, y: -0.48}
+  - {x: -0.10, y: -0.80}
+  - {x: -1.66, y: -0.80}
+  - {x: -1.66, y: 0.75}
+  - {x: -0.10, y: 0.75}
+  - {x: -0.10, y: 0.45}
+  - {x: 0.40, y: 0.45}
+  - {x: 0.46, y: 0.20}
+
+rect2:
+  - {x: 0.38, y: -0.23}
+  - {x: 0.38, y: -0.48}
+  - {x: -0.13, y: -0.48}
+  - {x: -0.13, y: -0.83}
+  - {x: -1.69, y: -0.83}
+  - {x: -1.69, y: 0.78}
+  - {x: -0.13, y: 0.78}
+  - {x: -0.13, y: 0.48}
+  - {x: 0.38, y: 0.48}
+  - {x: 0.38, y: 0.23}
+
+charge_enble: true   #充电过滤使能
+charge_length: 1.2   #充电桩长度
+charge_wide: 1.2   #充电桩宽度
+charge_high: 1.2    #充电桩高度
+charge_error: 1.2    #与车头方向的误差距离 (正向前)
+
+
+  
+  
