@@ -1,3 +1,5 @@
+
+
 # Lidar Filtering ROS Package
 
 ![ROS1](https://img.shields.io/badge/ROS-Noetic/Melodic-blue) ![PCL](https://img.shields.io/badge/Library-PCL-green) ![License](https://img.shields.io/badge/License-MIT-yellow)
@@ -10,6 +12,8 @@
 * **动态参数调节**：利用 `dynamic_reconfigure` 在不重启节点的情况下，实时调整滤波阈值。
 * **模块化设计**：核心滤波逻辑与 ROS 节点逻辑解耦，便于算法快速迭代。
 
+
+
 ## 2. 目录结构
 ```text
 .
@@ -20,12 +24,10 @@
 ├── src/                # 核心源代码 (node.cpp & filter_core.cpp)
 ├── CMakeLists.txt      # 编译脚本
 └── package.xml         # ROS 包元数据与依赖声明
+
 3. 安装依赖
 
-在编译前，请确保安装了以下核心依赖：
-
-    PCL Version: >= 1.10
-
+在编译前，请确保安装了以下核心依赖（推荐 PCL 版本 >= 1.10）：
 Bash
 
 sudo apt-get update
