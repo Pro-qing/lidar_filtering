@@ -27,6 +27,7 @@ ros::Publisher pub_16_filter_, pub_mid_filter_, pub_left_filter_, pub_right_filt
 ros::Publisher pub_16_calib_, pub_mid_calib_, pub_left_calib_, pub_right_calib_;
 ros::Publisher pub_car_marker_, pub_car2_marker_, pub_debug_origins_;
 
+
 // 新增：充电桩多边形发布者
 ros::Publisher pub_charge_polygon_marker_;
 
@@ -105,9 +106,8 @@ void publishSensorMarkers(const std_msgs::Header& header) {
     };
     add_marker(p_main, 0, 1.0, 0.0, 0.0, "Main");  
     add_marker(p_mid,  1, 0.0, 1.0, 0.0, "Mid");   
-    // [暂屏蔽单线]
-    // add_marker(p_left, 2, 0.0, 0.0, 1.0, "Left");  
-    // add_marker(p_right, 3, 1.0, 1.0, 0.0, "Right"); 
+    add_marker(p_left, 2, 0.0, 0.0, 1.0, "Left");  
+    add_marker(p_right, 3, 1.0, 1.0, 0.0, "Right"); 
     pub_debug_origins_.publish(markers);
 }
 
@@ -295,62 +295,62 @@ void processCloud(
     }
 }
 
-// [修改] 暂时移除单线雷达作为参数，只保留 16 和 mid
 void callback(const sensor_msgs::PointCloud2::ConstPtr &msg_16,
-              const sensor_msgs::PointCloud2::ConstPtr &msg_mid)
-            //   const sensor_msgs::LaserScan::ConstPtr &msg_left,
-            //   const sensor_msgs::LaserScan::ConstPtr &msg_right) 
+              const sensor_msgs::PointCloud2::ConstPtr &msg_mid,
+              const sensor_msgs::LaserScan::ConstPtr &msg_left,
+              const sensor_msgs::LaserScan::ConstPtr &msg_right) 
 {
     auto start_time = std::chrono::high_resolution_clock::now();
     bool check_speed = (can_info_.speed < maxSpeed);
 
-    // [暂屏蔽单线] 1. 拷贝
-    // sensor_msgs::LaserScan scan_left_copy = *msg_left;
-    // sensor_msgs::LaserScan scan_right_copy = *msg_right;
+    // [关键] 1. 拷贝
+    sensor_msgs::LaserScan scan_left_copy = *msg_left;
+    sensor_msgs::LaserScan scan_right_copy = *msg_right;
 
-    // [暂屏蔽单线] 2. 一致性校验
-    // filter_core_ptr_->checkScanConsistency(scan_left_copy, scan_right_copy, p_left.yaw, p_right.yaw);
+    // [关键] 2. 一致性校验
+    filter_core_ptr_->checkScanConsistency(scan_left_copy, scan_right_copy, p_left.yaw, p_right.yaw);
 
-    // [关键] 3. 并行处理 (仅处理多线雷达)
-    auto f1 = std::async(std::launch::async, processCloud, msg_16, p_main, f_main, std::ref(buf_main), false);
-    auto f2 = std::async(std::launch::async, processCloud, msg_mid, p_mid, f_mid, std::ref(buf_mid), true); 
-    // [暂屏蔽单线]
+    // // [关键] 3. 并行处理
+    // auto f1 = std::async(std::launch::async, processCloud, msg_16, p_main, f_main, std::ref(buf_main), false);
+    // auto f2 = std::async(std::launch::async, processCloud, msg_mid, p_mid, f_mid, std::ref(buf_mid), true);
     // auto f3 = std::async(std::launch::async, processScan, scan_left_copy, p_left, f_left, check_speed, leftLimit_min, leftLimit_max, std::ref(buf_left));
     // auto f4 = std::async(std::launch::async, processScan, scan_right_copy, p_right, f_right, check_speed, rightLimit_min, rightLimit_max, std::ref(buf_right));
 
-    f1.get(); f2.get(); 
-    // [暂屏蔽单线]
-    // f3.get(); f4.get();
+    // [关键] 3. 并行处理
+    auto f1 = std::async(std::launch::async, processCloud, msg_16, p_main, f_main, std::ref(buf_main), false);
+    auto f2 = std::async(std::launch::async, processCloud, msg_mid, p_mid, f_mid, std::ref(buf_mid), true); // Mid雷达使用PCL滤波
+    auto f3 = std::async(std::launch::async, processScan, scan_left_copy, p_left, f_left, check_speed, leftLimit_min, leftLimit_max, std::ref(buf_left));
+    auto f4 = std::async(std::launch::async, processScan, scan_right_copy, p_right, f_right, check_speed, rightLimit_min, rightLimit_max, std::ref(buf_right));
 
-    // 4. 专门针对 Mid 雷达进行充电桩处理
+    f1.get(); f2.get(); f3.get(); f4.get();
+
+    // [新增] 4. 专门针对 Mid 雷达进行充电桩处理
+    // 注意：charge_enble_ 和 fliter_charge_ 是 LidarFilterCore 的成员变量
     if (filter_core_ptr_->charge_enble_ && filter_core_ptr_->fliter_charge_ != 0 && !buf_mid.filt->empty()) {
+        // 4.1 执行充电桩过滤
+        // 注意：这里直接修改 buf_mid.filt，将其中的充电桩点剔除
         filter_core_ptr_->filterChargingStation(buf_mid.filt);
     }
 
-    // 1. Raw Merge (原始点云融合)
+
+
+    // 1. Raw Merge
     if (pub_points_raw.getNumSubscribers() > 0) {
         g_merged_raw->clear();
-        // [暂屏蔽单线] 调整申请的内存大小
-        g_merged_raw->reserve(buf_main.calib->size() + buf_mid.calib->size() /* + buf_left.calib->size() + buf_right.calib->size()*/);
-        
-        *g_merged_raw += *buf_main.calib; 
-        *g_merged_raw += *buf_mid.calib;
-        // [暂屏蔽单线]
-        // *g_merged_raw += *buf_left.calib; 
-        // *g_merged_raw += *buf_right.calib;
-        
+        g_merged_raw->reserve(buf_main.calib->size() + buf_mid.calib->size() + buf_left.calib->size() + buf_right.calib->size());
+        *g_merged_raw += *buf_main.calib; *g_merged_raw += *buf_mid.calib;
+        *g_merged_raw += *buf_left.calib; *g_merged_raw += *buf_right.calib;
         sensor_msgs::PointCloud2 raw_msg;
         pcl::toROSMsg(*g_merged_raw, raw_msg);
         raw_msg.header = msg_16->header; raw_msg.header.frame_id = parent_frame_;
         pub_points_raw.publish(raw_msg);
     }
 
-    // 2. Filter Merge (过滤后点云融合)
+    // 2. Filter Merge
     pcl::PointCloud<pcl::PointXYZI>::Ptr merged_cloud(new pcl::PointCloud<pcl::PointXYZI>());
     pcl::PointCloud<pcl::PointXYZI>::Ptr final_output(new pcl::PointCloud<pcl::PointXYZI>());
     
-    // [暂屏蔽单线] 统计大小
-    size_t total_filt = buf_main.filt->size() + buf_mid.filt->size(); /* + buf_left.filt->size() + buf_right.filt->size(); */
+    size_t total_filt = buf_main.filt->size() + buf_mid.filt->size() + buf_left.filt->size() + buf_right.filt->size();
     
     if (pub_merged_filter_.getNumSubscribers() > 0) {
         
@@ -358,11 +358,10 @@ void callback(const sensor_msgs::PointCloud2::ConstPtr &msg_16,
         *merged_cloud += *buf_main.filt; 
         *merged_cloud += *buf_mid.filt; // 此时 buf_mid.filt 已经剔除了充电桩点
         
-        // [暂屏蔽单线]
-        // if (enable_single_lidar_fusion) {
-        //     *merged_cloud += *buf_left.filt; 
-        //     *merged_cloud += *buf_right.filt;
-        // }
+        if (enable_single_lidar_fusion) {
+            *merged_cloud += *buf_left.filt; 
+            *merged_cloud += *buf_right.filt;
+        }
 
         // 调用通用滤波 (降采样/历史更新)
         filter_core_ptr_->pointcloud_filter(merged_cloud, final_output, true);
@@ -370,9 +369,14 @@ void callback(const sensor_msgs::PointCloud2::ConstPtr &msg_16,
         //  融合后进行充电桩过滤，并获取多边形
         charging_station_polygon_.reset();  // 重置多边形
         
+        // 调用过滤函数，假设它能填充充电桩多边形
+        // 这里需要根据您的实际实现来调用
         filter_core_ptr_->filterChargingStation(final_output);
         
+        
+        // 如果没有实际的充电桩多边形数据，这里提供一个多边形（矩形）
         if (debug_mode_ && charging_station_polygon_.polygon_points.empty()) {
+            // 创建一个矩形多边形（充电桩）
             geometry_msgs::Point p1, p2, p3, p4;
             p1.x = 5.0; p1.y = -1.0; p1.z = 0.0;
             p2.x = 5.0; p2.y = 1.0; p2.z = 0.0;
@@ -417,20 +421,23 @@ void callback(const sensor_msgs::PointCloud2::ConstPtr &msg_16,
 
     publish(pub_16_filter_, buf_main.filt);
     publish(pub_mid_filter_, buf_mid.filt);
-    
-    // [暂屏蔽单线发布]
-    // publish(pub_left_filter_, buf_left.filt);
-    // publish(pub_right_filter_, buf_right.filt);
-    // publish(pub_left_calib_, buf_left.calib);
-    // publish(pub_right_calib_, buf_right.calib);
+    publish(pub_left_filter_, buf_left.filt);
+    publish(pub_right_filter_, buf_right.filt);
 
     publish(pub_mid_calib_, buf_mid.calib);
+    publish(pub_left_calib_, buf_left.calib);
+    publish(pub_right_calib_, buf_right.calib);
 
     if (pub_car_marker_.getNumSubscribers() > 0) {
         visualization_msgs::MarkerArray ma; ma.markers.push_back(filter_core_ptr_->pubVehicleModel(vehicleSize));
         pub_car_marker_.publish(ma);
     }
     if (pub_car2_marker_.getNumSubscribers() > 0) {
+        visualization_msgs::MarkerArray ma;
+        ma.markers.push_back(filter_core_ptr_->pubVehicleModel(vehicleSize2));
+        pub_car2_marker_.publish(ma);
+    }
+    if (pub_car2_marker_.getNumSubscribers() > 1) {
         visualization_msgs::MarkerArray ma;
         ma.markers.push_back(filter_core_ptr_->pubVehicleModel(vehicleSize2));
         pub_car2_marker_.publish(ma);
@@ -489,18 +496,12 @@ int main(int argc, char **argv) {
     pub_points_raw = nh.advertise<PointCloud2>("points_raw", 10);
     pub_16_filter_    = nh.advertise<PointCloud2>("points_16_filter", 10);
     pub_mid_filter_   = nh.advertise<PointCloud2>("points_mid_filter", 10);
-    
-    // [暂屏蔽单线发布节点]
-    // pub_left_filter_  = nh.advertise<PointCloud2>("scan_left_filter", 10);
-    // pub_right_filter_ = nh.advertise<PointCloud2>("scan_right_filter", 10);
-    
+    pub_left_filter_  = nh.advertise<PointCloud2>("scan_left_filter", 10);
+    pub_right_filter_ = nh.advertise<PointCloud2>("scan_right_filter", 10);
     pub_16_calib_     = nh.advertise<PointCloud2>("points_16_calibration", 10);
     pub_mid_calib_    = nh.advertise<PointCloud2>("points_mid_calibration", 10);
-    
-    // [暂屏蔽单线发布节点]
-    // pub_left_calib_   = nh.advertise<PointCloud2>("points_left_calibration", 10);
-    // pub_right_calib_  = nh.advertise<PointCloud2>("points_right_calibration", 10);
-    
+    pub_left_calib_   = nh.advertise<PointCloud2>("points_left_calibration", 10);
+    pub_right_calib_  = nh.advertise<PointCloud2>("points_right_calibration", 10);
     pub_car_marker_   = nh.advertise<visualization_msgs::MarkerArray>("car", 1, true);
     pub_car2_marker_  = nh.advertise<visualization_msgs::MarkerArray>("car2", 1, true);
     pub_debug_origins_ = nh.advertise<visualization_msgs::MarkerArray>("debug/sensor_origins", 1, true);
@@ -509,23 +510,18 @@ int main(int argc, char **argv) {
     pub_charge_polygon_marker_ = nh.advertise<visualization_msgs::MarkerArray>("charge", 10);
 
     ros::Subscriber sub_can = nh.subscribe("/can_info", 10, &canInfoCallback);
-    
-    // 订阅器
     message_filters::Subscriber<PointCloud2> sub_16(nh, "/points_16", 1, ros::TransportHints().tcpNoDelay());
     message_filters::Subscriber<PointCloud2> sub_mid(nh, "/points_mid", 1, ros::TransportHints().tcpNoDelay());
-    
-    // [暂屏蔽单线订阅]
-    // message_filters::Subscriber<LaserScan> sub_left(nh, "/scan_left", 1, ros::TransportHints().tcpNoDelay());
-    // message_filters::Subscriber<LaserScan> sub_right(nh, "/scan_right", 1, ros::TransportHints().tcpNoDelay());
+    message_filters::Subscriber<LaserScan> sub_left(nh, "/scan_left", 1, ros::TransportHints().tcpNoDelay());
+    message_filters::Subscriber<LaserScan> sub_right(nh, "/scan_right", 1, ros::TransportHints().tcpNoDelay());
     
     ros::Subscriber sub_lqr = nh.subscribe("/lqr_targetwayp", 1, lqrWaypointCallback);
     
-    // [关键修改] 修改同步策略：由 4 个话题改为仅等待 2 个主话题
-    typedef sync_policies::ApproximateTime<PointCloud2, PointCloud2> SyncPolicy;
-    Synchronizer<SyncPolicy> sync(SyncPolicy(25), sub_16, sub_mid);
-    sync.registerCallback(boost::bind(&callback, _1, _2));
+    typedef sync_policies::ApproximateTime<PointCloud2, PointCloud2, LaserScan, LaserScan> SyncPolicy;
+    Synchronizer<SyncPolicy> sync(SyncPolicy(25), sub_16, sub_mid, sub_left, sub_right);
+    sync.registerCallback(boost::bind(&callback, _1, _2, _3, _4));
 
-    ROS_INFO("Lidar Filtering Node Started with Charging Station Polygon Publisher. [Single Lidars Disabled]");
+    ROS_INFO("Lidar Filtering Node Started with Charging Station Polygon Publisher.");
     ros::MultiThreadedSpinner spinner(4);
     spinner.spin();
     return 0;
