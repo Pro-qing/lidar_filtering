@@ -388,7 +388,7 @@ void callback(const sensor_msgs::PointCloud2::ConstPtr &msg_16,
             charging_station_polygon_.polygon_points.push_back(p3);
             charging_station_polygon_.polygon_points.push_back(p4);
             charging_station_polygon_.detected = true;
-            charging_station_polygon_.height = 2.0;
+            charging_station_polygon_.height = 1.5;
         }
 
         sensor_msgs::PointCloud2 msg; 
@@ -412,6 +412,12 @@ void callback(const sensor_msgs::PointCloud2::ConstPtr &msg_16,
         publishSensorMarkers(msg_16->header);
     }
 
+    // auto publish = [&](ros::Publisher& pub, const pcl::PointCloud<pcl::PointXYZI>::Ptr& cloud) {
+    //     if (pub.getNumSubscribers() > 0 && cloud && !cloud->empty()) {
+    //         sensor_msgs::PointCloud2 msg; pcl::toROSMsg(*cloud, msg);
+    //         msg.header = msg_16->header; msg.header.frame_id = parent_frame_; pub.publish(msg);
+    //     }
+    // };
     auto publish = [&](ros::Publisher& pub, const pcl::PointCloud<pcl::PointXYZI>::Ptr& cloud) {
         if (pub.getNumSubscribers() > 0 && cloud) { 
             // 删除了 !cloud->empty() 的判断
@@ -436,7 +442,8 @@ void callback(const sensor_msgs::PointCloud2::ConstPtr &msg_16,
     publish(pub_right_calib_, buf_right.calib);
 
     if (pub_car_marker_.getNumSubscribers() > 0) {
-        visualization_msgs::MarkerArray ma; ma.markers.push_back(filter_core_ptr_->pubVehicleModel(vehicleSize));
+        visualization_msgs::MarkerArray ma; 
+        ma.markers.push_back(filter_core_ptr_->pubVehicleModel(vehicleSize));
         pub_car_marker_.publish(ma);
     }
     if (pub_car2_marker_.getNumSubscribers() > 0) {
