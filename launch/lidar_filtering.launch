@@ -31,60 +31,64 @@
     <arg name="main_pitch" default="0.0" /> 
     <arg name="main_roll" default="0.0" />
 
-    <!-- fushi一号车 补盲TF参数 -->
+
+    <!-- 地牛三号车 测试车辆数据 补盲TF参数 -->
     
-    <!-- <arg name="top_x" default="0.07" />  
-    <arg name="top_y" default="-0.06" /> 
+    <arg name="top_x" default="0.15" />  
+    <arg name="top_y" default="-0.03" /> 
     <arg name="top_z" default="-0.23" />
-    <arg name="top_yaw" default="0.04" /> 
-    <arg name="top_pitch" default="-0.01" /> 
-    <arg name="top_roll" default="-3.11" /> -->
+    <arg name="top_yaw" default="-0.02" /> 
+    <arg name="top_pitch" default="0.18" /> 
+    <arg name="top_roll" default="-3.13" />
 
-    <!-- fushi二号车 补盲TF参数 -->
-<!--     
-    <arg name="top_x" default="0.12" />  
-    <arg name="top_y" default="-0.01" /> 
-    <arg name="top_z" default="-0.23" />
-    <arg name="top_yaw" default="-0.03" /> 
-    <arg name="top_pitch" default="-0.01" /> 
-    <arg name="top_roll" default="-3.11" /> -->
-
-    <!-- fushi测试车辆数据 补盲TF参数 -->
-    
-    <arg name="top_x" default="-0.02" />  
-    <arg name="top_y" default="-0.01" /> 
-    <arg name="top_z" default="-0.23" />
-    <arg name="top_yaw" default="-0.03" /> 
-    <arg name="top_pitch" default="-0.01" /> 
-    <arg name="top_roll" default="-3.11" />
-
-    <arg name="left_x" default="0.25" /> 
-    <arg name="left_y" default="0.35" /> 
+    <arg name="left_x" default="0.22" /> 
+    <arg name="left_y" default="0.33" /> 
     <arg name="left_z" default="-1.8" />
-    <arg name="left_yaw" default="-0.54" /> 
-    <arg name="left_pitch" default="3.1415926" /> 
-    <arg name="left_roll" default="0.0" />
+    <arg name="left_yaw" default="-2.08" /> 
+    <arg name="left_pitch" default="0.0" /> 
+    <arg name="left_roll" default="3.1415926" />
 
-    <arg name="right_x" default="0.19" /> 
-    <arg name="right_y" default="-0.40" /> 
+    <arg name="right_x" default="0.21" /> 
+    <arg name="right_y" default="-0.36" /> 
     <arg name="right_z" default="-1.8" />
-    <arg name="right_yaw" default="0.54" /> 
-    <arg name="right_pitch" default="3.1415926" /> 
-    <arg name="right_roll" default="0.0" />
+    <arg name="right_yaw" default="2.17" /> 
+    <arg name="right_pitch" default="0.0" /> 
+    <arg name="right_roll" default="3.1415926" />
 
     <!-- 单线雷达角度过滤参数
-    右雷达：保留 0 - 180° 和 340° - 360° 数据
-    左雷达：保留 0 - 20° 和 180° - 360° 数据
+    左雷达：保留 0 - 120° 和 280° - 360° 数据
+    右雷达：保留 0 - 100° 和 260° - 360° 数据
     -->
-    <arg name="right_a" default="190" /> 
-    <arg name="right_b" default="360" /> 
-    <arg name="right_c" default="0" />
-    <arg name="right_d" default="0" /> 
 
-    <arg name="left_a" default="0" /> 
-    <arg name="left_b" default="190" /> 
-    <arg name="left_c" default="340" />
+    <!-- <arg name="left_a" default="0" /> 
+    <arg name="left_b" default="120" /> 
+    <arg name="left_c" default="280" />
     <arg name="left_d" default="360" /> 
+
+    <arg name="right_a" default="0" /> 
+    <arg name="right_b" default="100" /> 
+    <arg name="right_c" default="260" />
+    <arg name="right_d" default="360" />  -->
+
+    <!-- ========================================== -->
+    <!-- 单线雷达双区间过滤参数 - 侧前方覆盖模式 -->
+    <!-- 目标：获取车体两侧 + 车头方向数据 -->
+    <!-- ========================================== -->
+    
+    <!-- 左雷达：yaw=-119.2°，覆盖车身左侧前方 30°~90° -->
+    <!-- 自身角度 = 149°~209°，转换后 = 29.8°~89.8° -->
+    <arg name="left_a" default="129" /> 
+    <arg name="left_b" default="209" /> 
+    <arg name="left_c" default="210" />
+    <arg name="left_d" default="270" /> 
+
+    <!-- 右雷达：yaw=124.4°，覆盖车身右侧前方 -30°~30° -->
+    <!-- 自身角度 = 206°~266°，转换后 = 330.4°~30.4° -->
+    <arg name="right_a" default="0" /> 
+    <arg name="right_b" default="180" /> 
+    <arg name="right_c" default="220" />
+    <arg name="right_d" default="360" />
+
 
     <!-- 1. 解决粘连：减小体素大小 -->
     <!-- 之前是 0.05，改回 0.03 或者 0.02 -->
@@ -104,7 +108,7 @@
         <!-- 环境过滤参数 -->
         <param name="height_max" value="0.0" />
         <!-- 高度过滤 -->
-        <param name="height_min" value="-1.80" />
+        <param name="height_min" value="-1.85" />
         <param name="height_filt" value="-5.0" />
         <param name="filter_floor" value="true" />
 
