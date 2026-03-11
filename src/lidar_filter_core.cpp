@@ -1,23 +1,23 @@
 #include "lidar_filtering/lidar_filter_core.hpp"
 
-// 【新增】强制在头文件展开模板
+// 强制在头文件展开模板以防链接报错
 #define PCL_NO_PRECOMPILE 
 
 #include <pcl/filters/voxel_grid.h>
-#include <pcl/filters/impl/voxel_grid.hpp>       // 【新增】
+#include <pcl/filters/impl/voxel_grid.hpp>       
 
 #include <pcl/filters/passthrough.h>
-#include <pcl/filters/impl/passthrough.hpp>     // 【新增】
+#include <pcl/filters/impl/passthrough.hpp>     
 
 #include <pcl/filters/statistical_outlier_removal.h>
 #include <pcl/filters/radius_outlier_removal.h>
-#include <pcl/filters/impl/radius_outlier_removal.hpp> // 【新增】
+#include <pcl/filters/impl/radius_outlier_removal.hpp> 
 
 #include <pcl/segmentation/sac_segmentation.h>
-#include <pcl/segmentation/impl/sac_segmentation.hpp>  // 【新增】
+#include <pcl/segmentation/impl/sac_segmentation.hpp>  
 
 #include <pcl/filters/extract_indices.h>
-#include <pcl/filters/impl/extract_indices.hpp>        // 【新增】
+#include <pcl/filters/impl/extract_indices.hpp>        
 
 #include <pcl/sample_consensus/sac_model_plane.h> 
 #include <pcl/sample_consensus/impl/sac_model_plane.hpp> 
@@ -27,9 +27,11 @@
 #include <tf2/utils.h>
 #include <omp.h>
 #include <cmath>
+
 LidarFilterCore::LidarFilterCore(ros::NodeHandle &nh, ros::NodeHandle &private_nh) 
     : nh_(nh), private_nh_(private_nh), tf_listener_(tf_buffer_)
 {
+    // 初始化时从 ROS 参数服务器读取默认值
     private_nh_.param("crop_radius", crop_radius_, 20.0);
     private_nh_.param("crop_radius_x", crop_radius_x_, 0.0);
     private_nh_.param("height_max", height_max_, 5.0);
@@ -64,7 +66,45 @@ LidarFilterCore::LidarFilterCore(ros::NodeHandle &nh, ros::NodeHandle &private_n
     charge_timer_ = nh_.createTimer(ros::Duration(0.2), &LidarFilterCore::chargeTimerCallback, this);
 }
 
-// 原单区间过滤
+// =========================================================
+// 【新增】接收 RQT 动态下发的配置参数
+// =========================================================
+void LidarFilterCore::updateDynamicConfig(const lidar_filtering::LidarFilteringConfig& config) {
+    std::lock_guard<std::mutex> lock(core_param_mutex_);
+    
+    crop_radius_ = config.crop_radius;
+    crop_radius_x_ = config.crop_radius_x;
+    height_max_ = config.height_max;
+    height_min_ = config.height_min;
+    height_filt_ = config.height_filt;
+    filter_floor_ = config.filter_floor;
+    
+    voxel_filter_ = config.voxel_filter;
+    voxel_filter_auto_ = config.voxel_filter_auto;
+    voxel_filter_eleva_ = config.voxel_filter_eleva;
+
+    filter_transient_ = config.filter_transient;
+    neighboring_points_ = config.neighboring_points;
+    stand_threshold_ = config.stand_threshold;
+    time_consistency_filter_ = config.time_consistency_filter;
+
+    radius_enble_ = config.radius_enble;
+    radius_radius_ = config.radius_radius;
+    radius_min_neighbors_ = config.radius_min_neighbors;
+
+    charge_enble_ = config.charge_enble;
+    charge_length_ = config.charge_length;
+    charge_wide_ = config.charge_wide;
+    charge_high_ = config.charge_high;
+    charge_error_ = config.charge_error;
+
+    consistency_enable_ = config.consistency_enable;
+    consistency_min_angle_ = config.consistency_min_angle;
+    consistency_max_angle_ = config.consistency_max_angle;
+    consistency_diff_dist_ = config.consistency_diff_dist;
+}
+
+// 静态辅助：原单区间过滤
 void LidarFilterCore::filterScanMsg(sensor_msgs::LaserScan& scan, double min_angle_deg, double max_angle_deg, double max_dis, bool is_limit_mode, double limit_min_deg, double limit_max_deg) 
 {
     int size = scan.ranges.size();
@@ -99,7 +139,7 @@ void LidarFilterCore::filterScanMsg(sensor_msgs::LaserScan& scan, double min_ang
     }
 }
 
-// 双区间保留过滤（带低速安全距离保护）
+// 静态辅助：双区间保留过滤（带低速安全距离保护）
 void LidarFilterCore::filterScanMsgDualInterval(sensor_msgs::LaserScan& scan, 
                                                 double a, double b, double c, double d,
                                                 double max_dis, 
@@ -121,25 +161,20 @@ void LidarFilterCore::filterScanMsgDualInterval(sensor_msgs::LaserScan& scan,
         while (angle_deg < 0) angle_deg += 360.0;
         while (angle_deg >= 360.0) angle_deg -= 360.0;
 
-        // 判断当前角度是否在 [a, b] 或 [c, d] 区间内
         bool keep = false;
         if (angle_deg >= a && angle_deg <= b) keep = true;
         if (angle_deg >= c && angle_deg <= d) keep = true;
 
         bool should_remove = !keep;
 
-        // 【更新】：车速限制模式逻辑
         if (!should_remove && is_limit_mode) {
             bool in_limit_angle = false;
-            // 检查该角度是否落入了限速盲区
             if (limit_min_deg > limit_max_deg) {
                 if (angle_deg > limit_min_deg || angle_deg < limit_max_deg) in_limit_angle = true;
             } else {
                 if (angle_deg > limit_min_deg && angle_deg < limit_max_deg) in_limit_angle = true;
             }
 
-            // 如果处于盲区，且距离超过了允许的安全距离 limit_dis，才执行剔除
-            // 换句话说，哪怕处于盲区，只要障碍物距离小于 limit_dis (比如0.5m)，我们依然保留它
             if (in_limit_angle && scan.ranges[i] > limit_dis) {
                 should_remove = true;
             }
@@ -152,11 +187,22 @@ void LidarFilterCore::filterScanMsgDualInterval(sensor_msgs::LaserScan& scan,
 void LidarFilterCore::checkScanConsistency(sensor_msgs::LaserScan& left, sensor_msgs::LaserScan& right, 
                                            double left_yaw, double right_yaw)
 {
-    if (!consistency_enable_) return;
+    // 【新增】安全获取动态参数
+    bool enable;
+    double min_angle, max_angle, diff_dist;
+    {
+        std::lock_guard<std::mutex> lock(core_param_mutex_);
+        enable = consistency_enable_;
+        min_angle = consistency_min_angle_;
+        max_angle = consistency_max_angle_;
+        diff_dist = consistency_diff_dist_;
+    }
 
-    double min_rad = consistency_min_angle_ * M_PI / 180.0;
-    double max_rad = consistency_max_angle_ * M_PI / 180.0;
-    double tol_dist = consistency_diff_dist_;
+    if (!enable) return;
+
+    double min_rad = min_angle * M_PI / 180.0;
+    double max_rad = max_angle * M_PI / 180.0;
+    double tol_dist = diff_dist;
 
     int left_size = left.ranges.size();
     double right_angle_min = right.angle_min;
@@ -198,6 +244,7 @@ void LidarFilterCore::checkScanConsistency(sensor_msgs::LaserScan& left, sensor_
     }
 }
 
+// OpenMP 版点云滤波器
 void LidarFilterCore::pointcloud_filter(pcl::PointCloud<pcl::PointXYZI>::Ptr in_cloud_ptr, 
                                         pcl::PointCloud<pcl::PointXYZI>::Ptr filter_cloud_ptr,
                                         bool update_history)
@@ -206,17 +253,28 @@ void LidarFilterCore::pointcloud_filter(pcl::PointCloud<pcl::PointXYZI>::Ptr in_
     filter_cloud_ptr->clear();
     filter_cloud_ptr->reserve(in_cloud_ptr->size() * 0.5);
 
-    double r_sq_max = crop_radius_ * crop_radius_;
+    // 【新增】安全拷贝局部变量（防线程冲突）
+    double local_crop_radius, local_crop_radius_x, z_min, z_max, z_floor;
+    double local_voxel_filter;
+    bool do_floor, charge_active, do_time_consistency;
+    {
+        std::lock_guard<std::mutex> lock(core_param_mutex_);
+        local_crop_radius = crop_radius_;
+        local_crop_radius_x = crop_radius_x_;
+        z_min = height_min_;
+        z_max = height_max_;
+        do_floor = filter_floor_;
+        z_floor = height_filt_;
+        local_voxel_filter = voxel_filter_;
+        charge_active = charge_enble_ && charge_cache_.valid;
+        do_time_consistency = time_consistency_filter_;
+    }
+
+    double r_sq_max = local_crop_radius * local_crop_radius;
     if (r_sq_max > 6400.0) r_sq_max = 6400.0; 
-    double z_min = height_min_; 
-    double z_max = height_max_;
-    bool do_floor = filter_floor_; 
-    double z_floor = height_filt_;
     
-    double min_dist_sq = voxel_filter_ * voxel_filter_;
+    double min_dist_sq = local_voxel_filter * local_voxel_filter;
     if (min_dist_sq < 0.0001) min_dist_sq = 0.0001;
-    
-    bool charge_active = charge_enble_ && charge_cache_.valid;
 
     int num_threads = omp_get_max_threads();
     std::vector<std::vector<pcl::PointXYZI>> thread_buffers(num_threads);
@@ -246,7 +304,7 @@ void LidarFilterCore::pointcloud_filter(pcl::PointCloud<pcl::PointXYZI>::Ptr in_
             if (pt.z < z_min || pt.z > z_max) continue;
             if (do_floor && pt.z < z_floor) continue;
             
-            double dx = pt.x - crop_radius_x_;
+            double dx = pt.x - local_crop_radius_x;
             if ((dx * dx + pt.y * pt.y) > r_sq_max) continue;
             
             double d_sq = (pt.x-last_x)*(pt.x-last_x) + (pt.y-last_y)*(pt.y-last_y) + (pt.z-last_z)*(pt.z-last_z);
@@ -265,17 +323,38 @@ void LidarFilterCore::pointcloud_filter(pcl::PointCloud<pcl::PointXYZI>::Ptr in_
     filter_cloud_ptr->height = 1;
     filter_cloud_ptr->is_dense = true;
 
-    if (time_consistency_filter_ && update_history) {
+    if (do_time_consistency && update_history) {
         std::lock_guard<std::mutex> lock(history_mutex_);
         prev_non_ground_cloud_ = *filter_cloud_ptr;
     }
 }
 
+// PCL 标准版点云滤波器
 void LidarFilterCore::pointcloud_filter_pcl(pcl::PointCloud<pcl::PointXYZI>::Ptr in_cloud_ptr, 
                                             pcl::PointCloud<pcl::PointXYZI>::Ptr filter_cloud_ptr,
                                             bool update_history)
 {
     if (in_cloud_ptr->empty()) return;
+
+    // 【新增】安全拷贝局部变量
+    double local_crop_radius, local_crop_radius_x, z_min, z_max;
+    double local_voxel, local_voxel_eleva;
+    bool do_floor, do_radius_filter;
+    double local_radius_radius;
+    int local_radius_neighbors;
+    {
+        std::lock_guard<std::mutex> lock(core_param_mutex_);
+        local_crop_radius = crop_radius_;
+        local_crop_radius_x = crop_radius_x_;
+        z_min = height_min_;
+        z_max = height_max_;
+        do_floor = filter_floor_;
+        local_voxel = voxel_filter_;
+        local_voxel_eleva = voxel_filter_eleva_;
+        do_radius_filter = radius_enble_;
+        local_radius_radius = radius_radius_;
+        local_radius_neighbors = radius_min_neighbors_;
+    }
 
     static thread_local pcl::PointCloud<pcl::PointXYZI>::Ptr tmp_cropped(new pcl::PointCloud<pcl::PointXYZI>);
     static thread_local pcl::PointCloud<pcl::PointXYZI>::Ptr tmp_voxel(new pcl::PointCloud<pcl::PointXYZI>);
@@ -285,12 +364,12 @@ void LidarFilterCore::pointcloud_filter_pcl(pcl::PointCloud<pcl::PointXYZI>::Ptr
 
     // Stage 1
     {
-        double safe_radius = (crop_radius_ > 80.0) ? 80.0 : crop_radius_;
+        double safe_radius = (local_crop_radius > 80.0) ? 80.0 : local_crop_radius;
         double safe_r_sq = safe_radius * safe_radius;
         for (const auto& pt : in_cloud_ptr->points) {
             if (!std::isfinite(pt.x) || !std::isfinite(pt.y) || !std::isfinite(pt.z)) continue;
-            if (pt.z < height_min_ || pt.z > height_max_) continue;
-            double dx = pt.x - crop_radius_x_;
+            if (pt.z < z_min || pt.z > z_max) continue;
+            double dx = pt.x - local_crop_radius_x;
             if ((dx * dx + pt.y * pt.y) > safe_r_sq) continue;
             tmp_cropped->push_back(pt);
         }
@@ -299,7 +378,7 @@ void LidarFilterCore::pointcloud_filter_pcl(pcl::PointCloud<pcl::PointXYZI>::Ptr
 
     // Stage 2
     {
-        double leaf_size = enbleElevator_ ? voxel_filter_eleva_ : voxel_filter_;
+        double leaf_size = enbleElevator_ ? local_voxel_eleva : local_voxel;
         if(leaf_size < 0.02) leaf_size = 0.02; 
         pcl::VoxelGrid<pcl::PointXYZI> vg;
         vg.setInputCloud(tmp_cropped);
@@ -310,7 +389,7 @@ void LidarFilterCore::pointcloud_filter_pcl(pcl::PointCloud<pcl::PointXYZI>::Ptr
 
     // Stage 3
     bool ransac_success = false;
-    if (filter_floor_) {
+    if (do_floor) {
         pcl::PointCloud<pcl::PointXYZI>::Ptr ground_seeds(new pcl::PointCloud<pcl::PointXYZI>);
         
         for (const auto& pt : tmp_voxel->points) {
@@ -367,18 +446,18 @@ void LidarFilterCore::pointcloud_filter_pcl(pcl::PointCloud<pcl::PointXYZI>::Ptr
             pcl::PassThrough<pcl::PointXYZI> pass_floor;
             pass_floor.setInputCloud(tmp_voxel);
             pass_floor.setFilterFieldName("z");
-            pass_floor.setFilterLimits(height_min_, -1.80); 
+            pass_floor.setFilterLimits(z_min, -1.80); 
             pass_floor.setFilterLimitsNegative(true); 
             pass_floor.filter(*tmp_nonground);
         }
     }
 
     // Stage 4
-    if (radius_enble_ && !tmp_nonground->empty()) {
+    if (do_radius_filter && !tmp_nonground->empty()) {
         pcl::RadiusOutlierRemoval<pcl::PointXYZI> outrem;
         outrem.setInputCloud(tmp_nonground);
-        outrem.setRadiusSearch(radius_radius_);
-        outrem.setMinNeighborsInRadius(radius_min_neighbors_);
+        outrem.setRadiusSearch(local_radius_radius);
+        outrem.setMinNeighborsInRadius(local_radius_neighbors);
         outrem.filter(*tmp_nonground);
     }
 
@@ -387,10 +466,15 @@ void LidarFilterCore::pointcloud_filter_pcl(pcl::PointCloud<pcl::PointXYZI>::Ptr
 
 void LidarFilterCore::filterChargingStation(pcl::PointCloud<pcl::PointXYZI>::Ptr cloud_ptr)
 {
-    if (!charge_enble_ || fliter_charge_ == 0 || cloud_ptr->empty()) return;
+    bool do_charge;
+    {
+        std::lock_guard<std::mutex> lock(core_param_mutex_);
+        do_charge = charge_enble_;
+    }
+
+    if (!do_charge || fliter_charge_ == 0 || cloud_ptr->empty()) return;
 
     updateChargeCache(transPose_);
-    size_t original_size = cloud_ptr->size();
     size_t write_index = 0;
     
     #pragma omp parallel for
@@ -406,16 +490,24 @@ void LidarFilterCore::filterChargingStation(pcl::PointCloud<pcl::PointXYZI>::Ptr
 }
 
 void LidarFilterCore::updateChargeCache(const geometry_msgs::Pose& pose) {
+    double length, wide, high;
+    {
+        std::lock_guard<std::mutex> lock(core_param_mutex_);
+        length = charge_length_;
+        wide = charge_wide_;
+        high = charge_high_;
+    }
+
     std::lock_guard<std::mutex> lock(charge_cache_mutex_);
     charge_cache_.pose = pose;
     double yaw = tf2::getYaw(pose.orientation);
     charge_cache_.cos_theta = std::cos(yaw);
     charge_cache_.sin_theta = std::sin(yaw);
     
-    charge_cache_.half_length = charge_length_ / 2.0;
-    charge_cache_.half_width = charge_wide_ / 2.0;
+    charge_cache_.half_length = length / 2.0;
+    charge_cache_.half_width = wide / 2.0;
     charge_cache_.z_min = pose.position.z; 
-    charge_cache_.z_max = pose.position.z + charge_high_;
+    charge_cache_.z_max = pose.position.z + high;
     
     charge_cache_.valid = true;
 }
@@ -470,6 +562,13 @@ void LidarFilterCore::filterVehicleBody(pcl::PointCloud<pcl::PointXYZI>::Ptr in_
                                         const std::vector<geometry_msgs::Point>& vehicle_polygon)
 {
     if (in_cloud_ptr->empty()) return;
+
+    double local_v_height;
+    {
+        std::lock_guard<std::mutex> lock(core_param_mutex_);
+        local_v_height = vehicle_height_;
+    }
+
     out_cloud_ptr->clear();
     out_cloud_ptr->reserve(in_cloud_ptr->size());
     int num_threads = omp_get_max_threads();
@@ -482,7 +581,7 @@ void LidarFilterCore::filterVehicleBody(pcl::PointCloud<pcl::PointXYZI>::Ptr in_
         for(size_t i=0; i<in_cloud_ptr->size(); ++i) {
             const auto& pt = in_cloud_ptr->points[i];
             geometry_msgs::Point p; p.x = pt.x; p.y = pt.y; p.z = pt.z;
-            bool in_vehicle_zone = pointInPolygon(p, vehicle_polygon) && (pt.z <= vehicle_height_);
+            bool in_vehicle_zone = pointInPolygon(p, vehicle_polygon) && (pt.z <= local_v_height);
             if (!in_vehicle_zone) {
                 thread_buffers[thread_id].push_back(pt);
             }
@@ -510,12 +609,18 @@ bool LidarFilterCore::pointInPolygon(const geometry_msgs::Point& point, const st
 }
 
 visualization_msgs::Marker LidarFilterCore::pubVehicleModel(const std::vector<geometry_msgs::Point>& polyCorner) {
+    double local_v_height;
+    {
+        std::lock_guard<std::mutex> lock(core_param_mutex_);
+        local_v_height = vehicle_height_;
+    }
+
     visualization_msgs::Marker marker; marker.header.frame_id = "velodyne"; marker.header.stamp = ros::Time::now();
     marker.ns = "vehicle_model"; marker.id = 0; marker.type = visualization_msgs::Marker::LINE_LIST;
     marker.action = visualization_msgs::Marker::ADD; marker.scale.x = 0.05; marker.color.r = 0.0; marker.color.g = 1.0; marker.color.b = 1.0; marker.color.a = 1.0;
     marker.pose.orientation.w = 1.0;
     if (polyCorner.empty()) return marker;
-    size_t n = polyCorner.size(); double h_min = -1.5; double h_max = vehicle_height_;
+    size_t n = polyCorner.size(); double h_min = -1.5; double h_max = local_v_height;
     for (size_t i = 0; i < n; ++i) {
         size_t next = (i + 1) % n;
         geometry_msgs::Point p1 = polyCorner[i]; geometry_msgs::Point p2 = polyCorner[next];
@@ -541,6 +646,15 @@ bool LidarFilterCore::transformPose(const geometry_msgs::TransformStamped& trans
 }
 
 void LidarFilterCore::keyPointCallback(const autoware_msgs::KeyPointArrayConstPtr &msg) {
+    double error, len, wide, high;
+    {
+        std::lock_guard<std::mutex> lock(core_param_mutex_);
+        error = charge_error_;
+        len = charge_length_;
+        wide = charge_wide_;
+        high = charge_high_;
+    }
+
     fliterpose_.clear(); bool found = false;
     if(!msg->path.empty()) {
         std::vector<int> idxs = {0, (int)msg->path.size()-1};
@@ -549,8 +663,13 @@ void LidarFilterCore::keyPointCallback(const autoware_msgs::KeyPointArrayConstPt
             for (const auto& t : msg->path.at(i).types) {
                 if(t.type_name == "charges") {
                     geometry_msgs::Pose p = msg->path.at(i).pose.pose;
-                    if(charge_error_!=0) { p.position.x += cos(tf2::getYaw(p.orientation))*charge_error_; p.position.y += sin(tf2::getYaw(p.orientation))*charge_error_; }
-                    fliterpose_.push_back(p); displayPolygonInRviz(marker_pub_, p, charge_length_, charge_wide_, charge_high_); found = true;
+                    if(error != 0) { 
+                        p.position.x += cos(tf2::getYaw(p.orientation)) * error; 
+                        p.position.y += sin(tf2::getYaw(p.orientation)) * error; 
+                    }
+                    fliterpose_.push_back(p); 
+                    displayPolygonInRviz(marker_pub_, p, len, wide, high); 
+                    found = true;
                 }
             }
         }
@@ -559,7 +678,15 @@ void LidarFilterCore::keyPointCallback(const autoware_msgs::KeyPointArrayConstPt
 }
 
 void LidarFilterCore::ctrolCallback(const std_msgs::Int8ConstPtr &msg) {
-    if(charge_enble_ && msg->data == 2) fliter_charge_ = 1; else if(charge_enble_ && msg->data < 0) fliter_charge_ = 2; else fliter_charge_ = 0;
+    bool do_charge;
+    {
+        std::lock_guard<std::mutex> lock(core_param_mutex_);
+        do_charge = charge_enble_;
+    }
+    if(do_charge && msg->data == 2) fliter_charge_ = 1; 
+    else if(do_charge && msg->data < 0) fliter_charge_ = 2; 
+    else fliter_charge_ = 0;
+    
     if(fabs(msg->data) == 4) enbleElevator_ = true; else enbleElevator_ = false;
 }
 
