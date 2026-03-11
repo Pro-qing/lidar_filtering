@@ -1,12 +1,19 @@
 # lidar_filtering/lidar_calibration.yaml
 tf_calibration:
   # 位姿参数
-  mid_x: 0.986
-  mid_y: -0.01
-  mid_z: 1.90
-  mid_yaw: -0.03
-  mid_pitch: 0.0
-  mid_roll: 0.0
+  main_x: 0.986
+  main_y: -0.01
+  main_z: 1.90
+  main_yaw: -0.03
+  main_pitch: 0.0
+  main_roll: 0.0  
+  
+  top_x:
+  top_y:
+  top_z:
+  top_yaw:
+  top_pitch:
+  top_roll:
 
   left_x: 0.0
   left_y: 0.0

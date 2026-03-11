@@ -1,17 +1,32 @@
 #include "lidar_filtering/lidar_filter_core.hpp"
+
+// 【新增】强制在头文件展开模板
+#define PCL_NO_PRECOMPILE 
+
 #include <pcl/filters/voxel_grid.h>
+#include <pcl/filters/impl/voxel_grid.hpp>       // 【新增】
+
 #include <pcl/filters/passthrough.h>
+#include <pcl/filters/impl/passthrough.hpp>     // 【新增】
+
 #include <pcl/filters/statistical_outlier_removal.h>
 #include <pcl/filters/radius_outlier_removal.h>
+#include <pcl/filters/impl/radius_outlier_removal.hpp> // 【新增】
+
 #include <pcl/segmentation/sac_segmentation.h>
+#include <pcl/segmentation/impl/sac_segmentation.hpp>  // 【新增】
+
 #include <pcl/filters/extract_indices.h>
+#include <pcl/filters/impl/extract_indices.hpp>        // 【新增】
+
+#include <pcl/sample_consensus/sac_model_plane.h> 
+#include <pcl/sample_consensus/impl/sac_model_plane.hpp> 
 
 #include <pcl_conversions/pcl_conversions.h>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.h>
 #include <tf2/utils.h>
 #include <omp.h>
 #include <cmath>
-
 LidarFilterCore::LidarFilterCore(ros::NodeHandle &nh, ros::NodeHandle &private_nh) 
     : nh_(nh), private_nh_(private_nh), tf_listener_(tf_buffer_)
 {
@@ -38,7 +53,7 @@ LidarFilterCore::LidarFilterCore(ros::NodeHandle &nh, ros::NodeHandle &private_n
     private_nh_.param("vehicle_height", vehicle_height_, 1.0);
     private_nh_.param("time_consistency_filter", time_consistency_filter_, false);
 
-    private_nh_.param("consistency_enable", consistency_enable_, true);
+    private_nh_.param("consistency_enable", consistency_enable_, false);
     private_nh_.param("consistency_min_angle", consistency_min_angle_, -30.0);
     private_nh_.param("consistency_max_angle", consistency_max_angle_, 30.0);
     private_nh_.param("consistency_diff_dist", consistency_diff_dist_, 1.2);
@@ -84,13 +99,13 @@ void LidarFilterCore::filterScanMsg(sensor_msgs::LaserScan& scan, double min_ang
     }
 }
 
-// [新增] 双区间保留过滤
+// 双区间保留过滤（带低速安全距离保护）
 void LidarFilterCore::filterScanMsgDualInterval(sensor_msgs::LaserScan& scan, 
                                                 double a, double b, double c, double d,
                                                 double max_dis, 
                                                 bool is_limit_mode, 
                                                 double limit_min_deg, double limit_max_deg,
-                                                double limit_dis) // <--- 新增参数
+                                                double limit_dis) 
 {
     int size = scan.ranges.size();
     double angle_min = scan.angle_min;
@@ -113,18 +128,18 @@ void LidarFilterCore::filterScanMsgDualInterval(sensor_msgs::LaserScan& scan,
 
         bool should_remove = !keep;
 
-        // 【核心修改】车速限制模式：不再直接剔除，而是限制该角度内的最大距离
+        // 【更新】：车速限制模式逻辑
         if (!should_remove && is_limit_mode) {
             bool in_limit_angle = false;
-            // 判断当前角度是否落入了限速盲区
+            // 检查该角度是否落入了限速盲区
             if (limit_min_deg > limit_max_deg) {
                 if (angle_deg > limit_min_deg || angle_deg < limit_max_deg) in_limit_angle = true;
             } else {
                 if (angle_deg > limit_min_deg && angle_deg < limit_max_deg) in_limit_angle = true;
             }
 
-            // 如果角度在盲区内，并且该点的距离【大于】允许的安全距离 (比如0.5m)，才把它剔除！
-            // 这样 0.5m 以内的点就能被保留下来了
+            // 如果处于盲区，且距离超过了允许的安全距离 limit_dis，才执行剔除
+            // 换句话说，哪怕处于盲区，只要障碍物距离小于 limit_dis (比如0.5m)，我们依然保留它
             if (in_limit_angle && scan.ranges[i] > limit_dis) {
                 should_remove = true;
             }
@@ -352,7 +367,7 @@ void LidarFilterCore::pointcloud_filter_pcl(pcl::PointCloud<pcl::PointXYZI>::Ptr
             pcl::PassThrough<pcl::PointXYZI> pass_floor;
             pass_floor.setInputCloud(tmp_voxel);
             pass_floor.setFilterFieldName("z");
-            pass_floor.setFilterLimits(height_min_, -1.85); 
+            pass_floor.setFilterLimits(height_min_, -1.80); 
             pass_floor.setFilterLimitsNegative(true); 
             pass_floor.filter(*tmp_nonground);
         }

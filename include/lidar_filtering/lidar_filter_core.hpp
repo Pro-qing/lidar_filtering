@@ -61,13 +61,13 @@ public:
                               double limit_min_deg = 0, double limit_max_deg = 0);
 
     // 静态辅助：LaserScan 2D 角度过滤 (双区间保留模式)
-    // 保留角度在 [a, b] 和 [c, d] 区间内的数据
+    // [更新]: 新增 limit_dis 参数，低速限速盲区内，允许保留 limit_dis 以内的数据
     static void filterScanMsgDualInterval(sensor_msgs::LaserScan& scan, 
                                           double a, double b, double c, double d,
                                           double max_dis, 
                                           bool is_limit_mode = false,
                                           double limit_min_deg = 0, double limit_max_deg = 0,
-                                          double limit_dis = 0.5); 
+                                          double limit_dis = 0.0);
 
     bool charge_enble_;
     std::atomic<int> fliter_charge_{0};

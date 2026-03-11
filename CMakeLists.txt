@@ -1,18 +1,15 @@
 cmake_minimum_required(VERSION 3.0.2)
 project(lidar_filtering)
 
-# 强制 PCL 使用 std::shared_ptr 而不是 boost::shared_ptr
+# 1. 设置 C++ 标准为 14 (PCL 1.8 建议 C++11 或 C++14)
+set(CMAKE_CXX_STANDARD 14)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+# 2. 【关键修改】开启 PCL_NO_PRECOMPILE 宏，防止 PointXYZI 报链接错误
 add_definitions(-DPCL_NO_PRECOMPILE)
-add_definitions(-DBOOST_ALL_NO_LIB)
-# ------------------
 
-add_compile_options(-std=c++14)
-
-# set_pcl
-set(PCL_DIR "/usr/include/pcl-1.10") 
-
-# 添加组件 filters 和 segmentation 
-find_package(PCL 1.10 EXACT REQUIRED COMPONENTS common io filters segmentation sample_consensus kdtree search)
+# 3. 指定寻找 PCL 1.8
+find_package(PCL 1.8 EXACT REQUIRED COMPONENTS common io filters segmentation sample_consensus kdtree search)
 
 # 包含 PCL 的头文件和库
 include_directories(${PCL_INCLUDE_DIRS})
@@ -24,6 +21,7 @@ find_package(catkin REQUIRED COMPONENTS
   sensor_msgs
   geometry_msgs
   std_msgs
+  pcl_ros
   pcl_conversions
   message_filters
   tf

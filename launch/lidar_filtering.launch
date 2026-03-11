@@ -41,19 +41,19 @@
     <arg name="top_pitch" default="0.18" /> 
     <arg name="top_roll" default="-3.13" />
 
-    <arg name="left_x" default="0.22" /> 
-    <arg name="left_y" default="0.33" /> 
+    <arg name="left_x" default="0.0" /> 
+    <arg name="left_y" default="0.0" /> 
     <arg name="left_z" default="-1.8" />
-    <arg name="left_yaw" default="-2.08" /> 
+    <arg name="left_yaw" default="0.0" /> 
     <arg name="left_pitch" default="0.0" /> 
-    <arg name="left_roll" default="3.1415926" />
+    <arg name="left_roll" default="0.0" />
 
-    <arg name="right_x" default="0.21" /> 
-    <arg name="right_y" default="-0.36" /> 
+    <arg name="right_x" default="0.0" /> 
+    <arg name="right_y" default="0.0" /> 
     <arg name="right_z" default="-1.8" />
-    <arg name="right_yaw" default="2.17" /> 
+    <arg name="right_yaw" default="0.0" /> 
     <arg name="right_pitch" default="0.0" /> 
-    <arg name="right_roll" default="3.1415926" />
+    <arg name="right_roll" default="0.0" />
 
     <!-- 单线雷达角度过滤参数
     左雷达：保留 0 - 120° 和 280° - 360° 数据

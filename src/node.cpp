@@ -13,6 +13,7 @@
 #include <future>
 #include <thread>
 #include <chrono>
+#include <algorithm>
 
 using namespace sensor_msgs;
 using namespace message_filters;
@@ -25,7 +26,7 @@ ros::Publisher pub_merged_filter_;
 ros::Publisher pub_points_raw;
 ros::Publisher pub_16_filter_, pub_mid_filter_, pub_left_filter_, pub_right_filter_;
 ros::Publisher pub_16_calib_, pub_mid_calib_, pub_left_calib_, pub_right_calib_;
-ros::Publisher pub_car_marker_, pub_car2_marker_, pub_debug_origins_;
+ros::Publisher pub_car_marker_, pub_debug_origins_;
 ros::Publisher pub_charge_polygon_marker_;
 
 std::string parent_frame_;
@@ -367,11 +368,6 @@ void callback(const sensor_msgs::PointCloud2::ConstPtr &msg_16,
         ma.markers.push_back(filter_core_ptr_->pubVehicleModel(vehicleSize));
         pub_car_marker_.publish(ma);
     }
-    if (pub_car2_marker_.getNumSubscribers() > 0) {
-        visualization_msgs::MarkerArray ma;
-        ma.markers.push_back(filter_core_ptr_->pubVehicleModel(vehicleSize2));
-        pub_car2_marker_.publish(ma);
-    }
 }
 
 void param_callback(lidar_filtering::LidarFilteringConfig &config, uint32_t level) {
@@ -395,22 +391,29 @@ void param_callback(lidar_filtering::LidarFilteringConfig &config, uint32_t leve
 }
 
 void lqrWaypointCallback(const autoware_msgs::Waypoint::ConstPtr& msg) {
-    if (msg) {
-        if (msg->wpsattr.routeBehavior == 4) {
-            if (enable_single_lidar_fusion) {
-                enable_single_lidar_fusion = false;
-                ROS_WARN("Single Lidar Fusion DISABLED (Direction: BACKWARD_LEFT).");
-            }
-        } else {
-            if (!enable_single_lidar_fusion) {
-                enable_single_lidar_fusion = true;
-                ROS_INFO("Single Lidar Fusion ENABLED.");
-            }
+    if (!msg) return; 
+    bool has_behavior_4 = (std::find(msg->wpsattr.routeBehavior.begin(), 
+                                     msg->wpsattr.routeBehavior.end(), 
+                                     4) != msg->wpsattr.routeBehavior.end());
+
+    if (has_behavior_4) {
+        // 如果数组中【包含】4，关闭单线雷达融合
+        if (enable_single_lidar_fusion) {
+            enable_single_lidar_fusion = false;
+            ROS_WARN("Single Lidar Fusion DISABLED (Direction: BACKWARD_LEFT).");
+        }
+    } else {
+        // 如果数组为空，或者数组中【不包含】4，保持融合开启
+        if (!enable_single_lidar_fusion) {
+            enable_single_lidar_fusion = true;
+            ROS_INFO("Single Lidar Fusion ENABLED.");
         }
     }
 }
 
 int main(int argc, char **argv) {
+    // omp_set_num_threads(2);
+
     ros::init(argc, argv, "multi_points");
     ros::NodeHandle nh; ros::NodeHandle p_nh("~");
     filter_core_ptr_ = std::make_shared<LidarFilterCore>(nh, p_nh);
@@ -439,18 +442,17 @@ int main(int argc, char **argv) {
     dynamic_reconfigure::Server<lidar_filtering::LidarFilteringConfig> server;
     server.setCallback(boost::bind(&param_callback, _1, _2));
 
-    pub_merged_filter_ = nh.advertise<PointCloud2>("points_filter", 10);
-    pub_points_raw = nh.advertise<PointCloud2>("points_raw", 10);
-    pub_16_filter_    = nh.advertise<PointCloud2>("points_16_filter", 10);
-    pub_mid_filter_   = nh.advertise<PointCloud2>("points_mid_filter", 10);
-    pub_left_filter_  = nh.advertise<PointCloud2>("scan_left_filter", 10);
-    pub_right_filter_ = nh.advertise<PointCloud2>("scan_right_filter", 10);
-    pub_16_calib_     = nh.advertise<PointCloud2>("points_16_calibration", 10);
-    pub_mid_calib_    = nh.advertise<PointCloud2>("points_mid_calibration", 10);
-    pub_left_calib_   = nh.advertise<PointCloud2>("points_left_calibration", 10);
-    pub_right_calib_  = nh.advertise<PointCloud2>("points_right_calibration", 10);
+    pub_merged_filter_ = nh.advertise<PointCloud2>("points_filter", 5);
+    pub_points_raw = nh.advertise<PointCloud2>("points_raw", 5);
+    pub_16_filter_    = nh.advertise<PointCloud2>("points_16_filter", 5);
+    pub_mid_filter_   = nh.advertise<PointCloud2>("points_mid_filter", 5);
+    pub_left_filter_  = nh.advertise<PointCloud2>("scan_left_filter", 5);
+    pub_right_filter_ = nh.advertise<PointCloud2>("scan_right_filter", 5);
+    pub_16_calib_     = nh.advertise<PointCloud2>("points_16_calibration", 5);
+    pub_mid_calib_    = nh.advertise<PointCloud2>("points_mid_calibration", 5);
+    pub_left_calib_   = nh.advertise<PointCloud2>("points_left_calibration", 5);
+    pub_right_calib_  = nh.advertise<PointCloud2>("points_right_calibration", 5);
     pub_car_marker_   = nh.advertise<visualization_msgs::MarkerArray>("car", 1, true);
-    pub_car2_marker_  = nh.advertise<visualization_msgs::MarkerArray>("car2", 1, true);
     pub_debug_origins_ = nh.advertise<visualization_msgs::MarkerArray>("debug/sensor_origins", 1, true);
     
     pub_charge_polygon_marker_ = nh.advertise<visualization_msgs::MarkerArray>("charge", 10);
@@ -464,11 +466,12 @@ int main(int argc, char **argv) {
     ros::Subscriber sub_lqr = nh.subscribe("/lqr_targetwayp", 1, lqrWaypointCallback);
     
     typedef sync_policies::ApproximateTime<PointCloud2, PointCloud2, LaserScan, LaserScan> SyncPolicy;
-    Synchronizer<SyncPolicy> sync(SyncPolicy(25), sub_16, sub_mid, sub_left, sub_right);
+    Synchronizer<SyncPolicy> sync(SyncPolicy(10), sub_16, sub_mid, sub_left, sub_right);
     sync.registerCallback(boost::bind(&callback, _1, _2, _3, _4));
 
     ROS_INFO("Lidar Filtering Node Started with Dual-Interval Scanning Mode.");
-    ros::MultiThreadedSpinner spinner(2);
+    ros::MultiThreadedSpinner spinner(4);
     spinner.spin();
     return 0;
 }
+
