@@ -15,6 +15,9 @@
 #include <tf2_ros/transform_listener.h>
 #include <pcl/common/common.h> 
 
+// 【新增】包含动态配置的头文件
+#include <lidar_filtering/LidarFilteringConfig.h>
+
 #include <vector>
 #include <mutex>
 #include <atomic>
@@ -24,6 +27,9 @@ class LidarFilterCore {
 public:
     LidarFilterCore(ros::NodeHandle &nh, ros::NodeHandle &private_nh);
     ~LidarFilterCore() = default;
+
+    // 【新增】接收 RQT 下发的动态参数更新
+    void updateDynamicConfig(const lidar_filtering::LidarFilteringConfig& config);
 
     // 通用点云滤波器
     void pointcloud_filter(pcl::PointCloud<pcl::PointXYZI>::Ptr in_cloud_ptr,
@@ -47,27 +53,11 @@ public:
     void checkScanConsistency(sensor_msgs::LaserScan& left, sensor_msgs::LaserScan& right, 
                               double left_yaw, double right_yaw);
 
-    // 可视化：生成车体模型
     visualization_msgs::Marker pubVehicleModel(const std::vector<geometry_msgs::Point>& polyCorner);
-
-    // 辅助：判断点是否在多边形内
     bool pointInPolygon(const geometry_msgs::Point& point, const std::vector<geometry_msgs::Point>& polyCorner);
 
-    // 静态辅助：LaserScan 2D 角度过滤 (单区间剔除模式)
-    static void filterScanMsg(sensor_msgs::LaserScan& scan, 
-                              double min_angle_deg, double max_angle_deg, 
-                              double max_dis, 
-                              bool is_limit_mode = false,
-                              double limit_min_deg = 0, double limit_max_deg = 0);
-
-    // 静态辅助：LaserScan 2D 角度过滤 (双区间保留模式)
-    // [更新]: 新增 limit_dis 参数，低速限速盲区内，允许保留 limit_dis 以内的数据
-    static void filterScanMsgDualInterval(sensor_msgs::LaserScan& scan, 
-                                          double a, double b, double c, double d,
-                                          double max_dis, 
-                                          bool is_limit_mode = false,
-                                          double limit_min_deg = 0, double limit_max_deg = 0,
-                                          double limit_dis = 0.0);
+    static void filterScanMsg(sensor_msgs::LaserScan& scan, double min_angle_deg, double max_angle_deg, double max_dis, bool is_limit_mode = false, double limit_min_deg = 0, double limit_max_deg = 0);
+    static void filterScanMsgDualInterval(sensor_msgs::LaserScan& scan, double a, double b, double c, double d, double max_dis, bool is_limit_mode = false, double limit_min_deg = 0, double limit_max_deg = 0, double limit_dis = 0.0);
 
     bool charge_enble_;
     std::atomic<int> fliter_charge_{0};
@@ -83,6 +73,9 @@ private:
     ros::Subscriber ctrol_sub_;
     ros::Publisher marker_pub_;
     ros::Timer charge_timer_;
+
+    // 【新增】参数访问保护锁
+    std::mutex core_param_mutex_;
 
     // Params
     double crop_radius_, crop_radius_x_;
@@ -103,10 +96,8 @@ private:
     int radius_min_neighbors_;
 
     double charge_length_, charge_wide_, charge_high_, charge_error_;
-    
     double vehicle_height_; 
 
-    // 一致性校验参数
     bool consistency_enable_;
     double consistency_min_angle_;
     double consistency_max_angle_;
@@ -120,7 +111,6 @@ private:
     void keyPointCallback(const autoware_msgs::KeyPointArrayConstPtr &msg);
     void ctrolCallback(const std_msgs::Int8ConstPtr &msg);
     void chargeTimerCallback(const ros::TimerEvent& event);
-    
     void displayPolygonInRviz(ros::Publisher& publisher, const geometry_msgs::Pose& pose_, float scale_x, float scale_y, float scale_z);
     bool transformPose(const geometry_msgs::TransformStamped& transform, const geometry_msgs::Pose& input_pose, geometry_msgs::Pose& output_pose);
 
@@ -140,8 +130,7 @@ private:
 
     void updateChargeCache(const geometry_msgs::Pose& pose);
     bool isPointInChargeArea(const pcl::PointXYZI& point);
-    std::vector<geometry_msgs::Point> getRectangleVertices(
-        const geometry_msgs::Pose& pose_, double length, double width);
+    std::vector<geometry_msgs::Point> getRectangleVertices(const geometry_msgs::Pose& pose_, double length, double width);
 };
 
 #endif

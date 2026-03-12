@@ -14,6 +14,14 @@
 #include <thread>
 #include <chrono>
 #include <algorithm>
+#include <fstream>
+#include <ros/package.h>
+
+// 用于 inotify 事件监听、非阻塞 poll 和多线程安全
+#include <sys/inotify.h>
+#include <poll.h>
+#include <unistd.h>
+#include <mutex>
 
 using namespace sensor_msgs;
 using namespace message_filters;
@@ -31,20 +39,17 @@ ros::Publisher pub_charge_polygon_marker_;
 
 std::string parent_frame_;
 std::vector<geometry_msgs::Point> vehicleSize;
-std::vector<geometry_msgs::Point> vehicleSize2;
 autoware_can_msgs::CANInfo can_info_;
 bool debug_mode_ = false;
 
 // 全局变量：控制单线雷达是否参与融合
 bool enable_single_lidar_fusion = true;
 
-// 存储充电桩多边形
 struct ChargingStationPolygon {
     bool detected = false;
     std::vector<geometry_msgs::Point> polygon_points;
     double height = 1.5; 
     double timestamp = 0.0;
-    
     void reset() {
         detected = false;
         polygon_points.clear();
@@ -67,7 +72,7 @@ LidarBuffers buf_main, buf_mid, buf_left, buf_right;
 pcl::PointCloud<pcl::PointXYZI>::Ptr g_merged_raw(new pcl::PointCloud<pcl::PointXYZI>());
 
 struct CalibrationParams {
-    double x, y, z, yaw, pitch, roll;
+    double x = 0, y = 0, z = 0, yaw = 0, pitch = 0, roll = 0;
     Eigen::Affine3f getMatrix() const {
         Eigen::Affine3f mat = Eigen::Affine3f::Identity();
         mat.translation() << x, y, z;
@@ -78,14 +83,16 @@ struct CalibrationParams {
     }
 };
 
-// 增加双区间过滤所需的参数 a, b, c, d
 struct FilterParams { 
     int enable; 
     double min_angle, max_angle, max_dis; 
     double a = 0, b = 360, c = 0, d = 360; 
 };
 
+// 用于保护标定参数的互斥锁（参数由 yaml 直接读取，不再通过 rqt）
+std::mutex calib_mutex;
 CalibrationParams p_main, p_mid, p_left, p_right;
+
 FilterParams f_main, f_mid, f_left, f_right;
 double maxSpeed, maxLimitDis_speed;
 double leftLimit_min, leftLimit_max, rightLimit_min, rightLimit_max;
@@ -108,18 +115,24 @@ void publishSensorMarkers(const std_msgs::Header& header) {
         t.color.a = 1.0; t.color.r = 1.0; t.color.g = 1.0; t.color.b = 1.0; t.text = text;
         markers.markers.push_back(t);
     };
-    add_marker(p_main, 0, 1.0, 0.0, 0.0, "Main");  
-    add_marker(p_mid,  1, 0.0, 1.0, 0.0, "Mid");   
-    add_marker(p_left, 2, 0.0, 0.0, 1.0, "Left");  
-    add_marker(p_right, 3, 1.0, 1.0, 0.0, "Right"); 
+
+    // 获取当前外参的安全拷贝
+    CalibrationParams lm, lmid, lleft, lright;
+    {
+        std::lock_guard<std::mutex> lock(calib_mutex);
+        lm = p_main; lmid = p_mid; lleft = p_left; lright = p_right;
+    }
+
+    add_marker(lm, 0, 1.0, 0.0, 0.0, "Main");  
+    add_marker(lmid,  1, 0.0, 1.0, 0.0, "Mid");   
+    add_marker(lleft, 2, 0.0, 0.0, 1.0, "Left");  
+    add_marker(lright, 3, 1.0, 1.0, 0.0, "Right"); 
     pub_debug_origins_.publish(markers);
 }
 
 void publishChargingStationPolygon(const std_msgs::Header& header) {
     if (!charging_station_polygon_.detected || charging_station_polygon_.polygon_points.size() < 3) return;
-    
     visualization_msgs::MarkerArray markers;
-    
     visualization_msgs::Marker polygon_marker;
     polygon_marker.header = header;
     polygon_marker.header.frame_id = parent_frame_;
@@ -193,16 +206,8 @@ void publishChargingStationPolygon(const std_msgs::Header& header) {
     pub_charge_polygon_marker_.publish(markers);
 }
 
-void processScan(
-    sensor_msgs::LaserScan scan_copy, 
-    const CalibrationParams& calib, 
-    const FilterParams& filter,
-    bool is_limit_check, double limit_min, double limit_max,
-    LidarBuffers& buf) 
-{
+void processScan(sensor_msgs::LaserScan scan_copy, CalibrationParams calib, FilterParams filter, bool is_limit_check, double limit_min, double limit_max, LidarBuffers& buf) {
     buf.calib->clear(); buf.filt->clear(); buf.raw_count = scan_copy.ranges.size();
-
-    // 1. 标定数据生成 (保留原始全部数据供 calibration 调试使用)
     LidarFilterCore::filterScanMsg(scan_copy, 0, 0, 100.0, false, 0, 0);
     sensor_msgs::PointCloud2 cloud_msg;
     try { projector_.projectLaser(scan_copy, cloud_msg); } catch (...) {}
@@ -210,25 +215,13 @@ void processScan(
         pcl::fromROSMsg(cloud_msg, *buf.calib);
         pcl::transformPointCloud(*buf.calib, *buf.calib, calib.getMatrix());
     }
-
-    // 2. 过滤数据生成
     if (filter.enable) {
         sensor_msgs::LaserScan scan_strict = scan_copy;
-
-        // 如果开启限速检查 且 当前车速 < 设定的最低限速 且 限速距离合理
         bool limit_mode = is_limit_check && (can_info_.speed < maxSpeed) && (maxLimitDis_speed < filter.max_dis);
-        
-        // 【核心修改】将 maxLimitDis_speed 作为最后的一个参数传进去
-        LidarFilterCore::filterScanMsgDualInterval(scan_strict, 
-                                                filter.a, filter.b, filter.c, filter.d, 
-                                                filter.max_dis, 
-                                                limit_mode, limit_min, limit_max,
-                                                maxLimitDis_speed); 
-        
+        LidarFilterCore::filterScanMsgDualInterval(scan_strict, filter.a, filter.b, filter.c, filter.d, filter.max_dis, limit_mode, limit_min, limit_max, maxLimitDis_speed); 
         sensor_msgs::PointCloud2 strict_msg;
         pcl::PointCloud<pcl::PointXYZI>::Ptr cloud_strict(new pcl::PointCloud<pcl::PointXYZI>);
         try { projector_.projectLaser(scan_strict, strict_msg); } catch(...){}
-        
         if (strict_msg.width > 0) {
             pcl::fromROSMsg(strict_msg, *cloud_strict);
             pcl::transformPointCloud(*cloud_strict, *cloud_strict, calib.getMatrix());
@@ -239,17 +232,10 @@ void processScan(
     }
 }
 
-void processCloud(
-    const sensor_msgs::PointCloud2::ConstPtr &cloud_msg,
-    const CalibrationParams& calib,
-    const FilterParams& filter,
-    LidarBuffers& buf,
-    bool use_pcl = false) 
-{
+void processCloud(const sensor_msgs::PointCloud2::ConstPtr &cloud_msg, CalibrationParams calib, FilterParams filter, LidarBuffers& buf, bool use_pcl = false) {
     buf.calib->clear(); buf.filt->clear(); buf.raw_count = cloud_msg->width * cloud_msg->height;
     pcl::fromROSMsg(*cloud_msg, *buf.calib);
     pcl::transformPointCloud(*buf.calib, *buf.calib, calib.getMatrix());
-
     if (filter.enable) {
         pcl::PointCloud<pcl::PointXYZI>::Ptr env_cloud(new pcl::PointCloud<pcl::PointXYZI>);
         if (use_pcl) filter_core_ptr_->pointcloud_filter_pcl(buf.calib, env_cloud, false);
@@ -258,24 +244,29 @@ void processCloud(
     }
 }
 
-void callback(const sensor_msgs::PointCloud2::ConstPtr &msg_16,
-              const sensor_msgs::PointCloud2::ConstPtr &msg_mid,
-              const sensor_msgs::LaserScan::ConstPtr &msg_left,
-              const sensor_msgs::LaserScan::ConstPtr &msg_right) 
-{
+void callback(const sensor_msgs::PointCloud2::ConstPtr &msg_16, const sensor_msgs::PointCloud2::ConstPtr &msg_mid, const sensor_msgs::LaserScan::ConstPtr &msg_left, const sensor_msgs::LaserScan::ConstPtr &msg_right) {
     auto start_time = std::chrono::high_resolution_clock::now();
     bool check_speed = (can_info_.speed < maxSpeed);
-
     sensor_msgs::LaserScan scan_left_copy = *msg_left;
     sensor_msgs::LaserScan scan_right_copy = *msg_right;
 
-    // 调试：暂时注释掉一致性校验
-    filter_core_ptr_->checkScanConsistency(scan_left_copy, scan_right_copy, p_left.yaw, p_right.yaw);
+    // 获取当前外参的安全拷贝（防线程冲突）
+    CalibrationParams local_p_main, local_p_mid, local_p_left, local_p_right;
+    {
+        std::lock_guard<std::mutex> lock(calib_mutex);
+        local_p_main = p_main;
+        local_p_mid = p_mid;
+        local_p_left = p_left;
+        local_p_right = p_right;
+    }
 
-    auto f1 = std::async(std::launch::async, processCloud, msg_16, p_main, f_main, std::ref(buf_main), false);
-    auto f2 = std::async(std::launch::async, processCloud, msg_mid, p_mid, f_mid, std::ref(buf_mid), true); 
-    auto f3 = std::async(std::launch::async, processScan, scan_left_copy, p_left, f_left, check_speed, leftLimit_min, leftLimit_max, std::ref(buf_left));
-    auto f4 = std::async(std::launch::async, processScan, scan_right_copy, p_right, f_right, check_speed, rightLimit_min, rightLimit_max, std::ref(buf_right));
+    filter_core_ptr_->checkScanConsistency(scan_left_copy, scan_right_copy, local_p_left.yaw, local_p_right.yaw);
+
+    // 将安全拷贝传入异步处理函数
+    auto f1 = std::async(std::launch::async, processCloud, msg_16, local_p_main, f_main, std::ref(buf_main), false);
+    auto f2 = std::async(std::launch::async, processCloud, msg_mid, local_p_mid, f_mid, std::ref(buf_mid), true); 
+    auto f3 = std::async(std::launch::async, processScan, scan_left_copy, local_p_left, f_left, check_speed, leftLimit_min, leftLimit_max, std::ref(buf_left));
+    auto f4 = std::async(std::launch::async, processScan, scan_right_copy, local_p_right, f_right, check_speed, rightLimit_min, rightLimit_max, std::ref(buf_right));
 
     f1.get(); f2.get(); f3.get(); f4.get();
 
@@ -296,7 +287,6 @@ void callback(const sensor_msgs::PointCloud2::ConstPtr &msg_16,
 
     pcl::PointCloud<pcl::PointXYZI>::Ptr merged_cloud(new pcl::PointCloud<pcl::PointXYZI>());
     pcl::PointCloud<pcl::PointXYZI>::Ptr final_output(new pcl::PointCloud<pcl::PointXYZI>());
-    
     size_t total_filt = buf_main.filt->size() + buf_mid.filt->size() + buf_left.filt->size() + buf_right.filt->size();
     
     if (pub_merged_filter_.getNumSubscribers() > 0) {
@@ -310,7 +300,6 @@ void callback(const sensor_msgs::PointCloud2::ConstPtr &msg_16,
         }
 
         filter_core_ptr_->pointcloud_filter(merged_cloud, final_output, true);
-
         charging_station_polygon_.reset();  
         filter_core_ptr_->filterChargingStation(final_output);
         
@@ -333,9 +322,7 @@ void callback(const sensor_msgs::PointCloud2::ConstPtr &msg_16,
         pub_merged_filter_.publish(msg);
     }
 
-    if (pub_charge_polygon_marker_.getNumSubscribers() > 0) {
-        publishChargingStationPolygon(msg_16->header);
-    }
+    if (pub_charge_polygon_marker_.getNumSubscribers() > 0) publishChargingStationPolygon(msg_16->header);
 
     if (debug_mode_) {
         auto end_time = std::chrono::high_resolution_clock::now();
@@ -348,9 +335,7 @@ void callback(const sensor_msgs::PointCloud2::ConstPtr &msg_16,
         if (pub.getNumSubscribers() > 0 && cloud) { 
             sensor_msgs::PointCloud2 msg; 
             pcl::toROSMsg(*cloud, msg);
-            msg.header = msg_16->header; 
-            msg.header.frame_id = parent_frame_; 
-            pub.publish(msg);
+            msg.header = msg_16->header; msg.header.frame_id = parent_frame_; pub.publish(msg);
         }
     };
 
@@ -358,7 +343,6 @@ void callback(const sensor_msgs::PointCloud2::ConstPtr &msg_16,
     publish(pub_mid_filter_, buf_mid.filt);
     publish(pub_left_filter_, buf_left.filt);
     publish(pub_right_filter_, buf_right.filt);
-
     publish(pub_mid_calib_, buf_mid.calib);
     publish(pub_left_calib_, buf_left.calib);
     publish(pub_right_calib_, buf_right.calib);
@@ -370,13 +354,13 @@ void callback(const sensor_msgs::PointCloud2::ConstPtr &msg_16,
     }
 }
 
+// 供 dynamic_reconfigure 回调（仅包含过滤参数，不再包含标定参数）
 void param_callback(lidar_filtering::LidarFilteringConfig &config, uint32_t level) {
-    p_main = {config.main_x, config.main_y, config.main_z, config.main_yaw, config.main_pitch, config.main_roll};
-    p_mid  = {config.top_x, config.top_y, config.top_z, config.top_yaw, config.top_pitch, config.top_roll};
-    p_left = {config.left_x, config.left_y, config.left_z, config.left_yaw, config.left_pitch, config.left_roll};
-    p_right= {config.right_x, config.right_y, config.right_z, config.right_yaw, config.right_pitch, config.right_roll};
-    
-    // [修改] 保护新加入的双区间参数不被 dynamic_reconfigure 洗掉
+    // 将 GUI 参数透传给 LidarFilterCore
+    if (filter_core_ptr_) {
+        filter_core_ptr_->updateDynamicConfig(config);
+    }
+
     double la = f_left.a, lb = f_left.b, lc = f_left.c, ld = f_left.d;
     double ra = f_right.a, rb = f_right.b, rc = f_right.c, rd = f_right.d;
 
@@ -392,55 +376,185 @@ void param_callback(lidar_filtering::LidarFilteringConfig &config, uint32_t leve
 
 void lqrWaypointCallback(const autoware_msgs::Waypoint::ConstPtr& msg) {
     if (!msg) return; 
-    bool has_behavior_4 = (std::find(msg->wpsattr.routeBehavior.begin(), 
-                                     msg->wpsattr.routeBehavior.end(), 
-                                     4) != msg->wpsattr.routeBehavior.end());
-
+    bool has_behavior_4 = (std::find(msg->wpsattr.routeBehavior.begin(), msg->wpsattr.routeBehavior.end(), 4) != msg->wpsattr.routeBehavior.end());
     if (has_behavior_4) {
-        // 如果数组中【包含】4，关闭单线雷达融合
-        if (enable_single_lidar_fusion) {
-            enable_single_lidar_fusion = false;
-            ROS_WARN("Single Lidar Fusion DISABLED (Direction: BACKWARD_LEFT).");
-        }
+        if (enable_single_lidar_fusion) { enable_single_lidar_fusion = false; ROS_WARN("Single Lidar Fusion DISABLED"); }
     } else {
-        // 如果数组为空，或者数组中【不包含】4，保持融合开启
-        if (!enable_single_lidar_fusion) {
-            enable_single_lidar_fusion = true;
-            ROS_INFO("Single Lidar Fusion ENABLED.");
-        }
+        if (!enable_single_lidar_fusion) { enable_single_lidar_fusion = true; ROS_INFO("Single Lidar Fusion ENABLED."); }
     }
 }
 
-int main(int argc, char **argv) {
-    // omp_set_num_threads(2);
+// =========================================================================
+// 纯内部轻量级 YAML 解析，彻底摆脱 rqt 的限制
+// =========================================================================
+void reloadCalibrationYaml(const std::string& filepath) {
+    std::ifstream file(filepath);
+    if (!file.is_open()) {
+        ROS_WARN("Cannot open lidar_calibration.yaml at: %s", filepath.c_str());
+        return;
+    }
 
+    std::string line;
+    bool updated = false;
+
+    // 获取锁，准备更新标定参数
+    std::lock_guard<std::mutex> lock(calib_mutex);
+
+    while (std::getline(file, line)) {
+        size_t comment_pos = line.find('#');
+        if (comment_pos != std::string::npos) line = line.substr(0, comment_pos);
+
+        size_t colon_pos = line.find(':');
+        if (colon_pos == std::string::npos) continue;
+
+        std::string key = line.substr(0, colon_pos);
+        std::string val = line.substr(colon_pos + 1);
+
+        key.erase(0, key.find_first_not_of(" \t\r\n"));
+        key.erase(key.find_last_not_of(" \t\r\n") + 1);
+        val.erase(0, val.find_first_not_of(" \t\r\n"));
+        val.erase(val.find_last_not_of(" \t\r\n") + 1);
+
+        if (val.empty() || val == "null" || val == "~") continue;
+
+        try {
+            double num = std::stod(val);
+            updated = true;
+            
+            if(key == "main_x") p_main.x = num; else if(key == "main_y") p_main.y = num;
+            else if(key == "main_z") p_main.z = num; else if(key == "main_yaw") p_main.yaw = num;
+            else if(key == "main_pitch") p_main.pitch = num; else if(key == "main_roll") p_main.roll = num;
+            
+            else if(key == "top_x") p_mid.x = num; else if(key == "top_y") p_mid.y = num;
+            else if(key == "top_z") p_mid.z = num; else if(key == "top_yaw") p_mid.yaw = num;
+            else if(key == "top_pitch") p_mid.pitch = num; else if(key == "top_roll") p_mid.roll = num;
+
+            else if(key == "left_x") p_left.x = num; else if(key == "left_y") p_left.y = num;
+            else if(key == "left_z") p_left.z = num; else if(key == "left_yaw") p_left.yaw = num;
+            else if(key == "left_pitch") p_left.pitch = num; else if(key == "left_roll") p_left.roll = num;
+
+            else if(key == "right_x") p_right.x = num; else if(key == "right_y") p_right.y = num;
+            else if(key == "right_z") p_right.z = num; else if(key == "right_yaw") p_right.yaw = num;
+            else if(key == "right_pitch") p_right.pitch = num; else if(key == "right_roll") p_right.roll = num;
+        } catch (...) { /* ignore invalid numbers */ }
+    }
+
+    if (updated) {
+        ROS_INFO("\033[1;32m[Calibration] Loaded new parameters from %s!\033[0m", filepath.c_str());
+    }
+}
+
+// =========================================================================
+// 安全无死锁的 inotify 文件监听线程（使用 poll 解决退出崩溃）
+// =========================================================================
+void watchParamsDirectory(const std::string& full_path) {
+    if (full_path.empty()) return;
+
+    // 解析出所在目录和文件名
+    size_t last_slash_idx = full_path.find_last_of('/');
+    if (last_slash_idx == std::string::npos) {
+        ROS_ERROR("Invalid calibration file path (no directory provided): %s", full_path.c_str());
+        return;
+    }
+
+    std::string watch_dir = full_path.substr(0, last_slash_idx);
+    std::string watch_file = full_path.substr(last_slash_idx + 1);
+
+    int fd = inotify_init1(IN_NONBLOCK);
+    if (fd < 0) {
+        ROS_ERROR("Failed to initialize non-blocking inotify.");
+        return;
+    }
+
+    // 监听指定的目录
+    int wd = inotify_add_watch(fd, watch_dir.c_str(), IN_CLOSE_WRITE | IN_MOVED_TO);
+    if (wd < 0) {
+        ROS_ERROR("Failed to watch directory: %s", watch_dir.c_str());
+        close(fd);
+        return;
+    }
+
+    struct pollfd pfd;
+    pfd.fd = fd;
+    pfd.events = POLLIN;
+
+    char buffer[1024];
+    
+    // 每秒唤醒一次检查 ros::ok()
+    while (ros::ok()) {
+        int ret = poll(&pfd, 1, 1000); 
+        
+        if (ret > 0 && (pfd.revents & POLLIN)) {
+            int length = read(fd, buffer, sizeof(buffer));
+            if (length > 0) {
+                int i = 0;
+                bool should_reload = false;
+                while (i < length) {
+                    struct inotify_event *event = (struct inotify_event *) &buffer[i];
+                    // 精确匹配文件名
+                    if (event->len && std::string(event->name) == watch_file) {
+                        should_reload = true;
+                    }
+                    i += sizeof(struct inotify_event) + event->len;
+                }
+                
+                if (should_reload) {
+                    // 等待编辑器释放文件锁
+                    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                    reloadCalibrationYaml(full_path);
+                }
+            }
+        }
+    }
+
+    inotify_rm_watch(fd, wd);
+    close(fd);
+}
+
+int main(int argc, char **argv) {
     ros::init(argc, argv, "multi_points");
     ros::NodeHandle nh; ros::NodeHandle p_nh("~");
     filter_core_ptr_ = std::make_shared<LidarFilterCore>(nh, p_nh);
     p_nh.param("debug_mode", debug_mode_, false);
 
-    // [新增] 读取 Launch 传入的单线雷达双区间过滤角度参数
-    p_nh.param("left_a", f_left.a, 0.0);
-    p_nh.param("left_b", f_left.b, 0.0);
-    p_nh.param("left_c", f_left.c, 0.0);
-    p_nh.param("left_d", f_left.d, 0.0);
+    p_nh.param("left_a", f_left.a, 0.0); p_nh.param("left_b", f_left.b, 0.0);
+    p_nh.param("left_c", f_left.c, 0.0); p_nh.param("left_d", f_left.d, 0.0);
+    p_nh.param("right_a", f_right.a, 0.0); p_nh.param("right_b", f_right.b, 0.0);
+    p_nh.param("right_c", f_right.c, 0.0); p_nh.param("right_d", f_right.d, 0.0);
 
-    p_nh.param("right_a", f_right.a, 0.0);
-    p_nh.param("right_b", f_right.b, 0.0);
-    p_nh.param("right_c", f_right.c, 0.0);
-    p_nh.param("right_d", f_right.d, 0.0);
-
-    std::cout << "pcl_version:" << PCL_VERSION << std::endl;
-
-    XmlRpc::XmlRpcValue carpoints, carpoints2;
+    XmlRpc::XmlRpcValue carpoints;
     p_nh.getParam("rect", carpoints);
     if (carpoints.getType() == XmlRpc::XmlRpcValue::TypeArray) {
         for(int i=0; i<carpoints.size(); i++) { geometry_msgs::Point pt; pt.x=carpoints[i]["x"]; pt.y=carpoints[i]["y"]; vehicleSize.push_back(pt); }
-    } else { geometry_msgs::Point p; p.x=1; p.y=1; vehicleSize.push_back(p); p.x=1; p.y=-1; vehicleSize.push_back(p); p.x=-1; p.y=-1; vehicleSize.push_back(p); p.x=-1; p.y=1; vehicleSize.push_back(p); }
+    } else { 
+        geometry_msgs::Point p; p.x=1; p.y=1; vehicleSize.push_back(p); 
+        p.x=1; p.y=-1; vehicleSize.push_back(p); p.x=-1; p.y=-1; vehicleSize.push_back(p); p.x=-1; p.y=1; vehicleSize.push_back(p); 
+    }
 
     p_nh.param<std::string>("parent_frame", parent_frame_, "velodyne");
+
+    // =========================================================================
+    // 从 launch 获取指定的绝对路径，并加载 yaml
+    // =========================================================================
+    std::string calibration_file_path;
+    p_nh.param<std::string>("calibration_file_path", calibration_file_path, "");
+
+    // 容错处理：如果没传入，则退回到 install 目录下的默认地址
+    if (calibration_file_path.empty()) {
+        std::string pkg_path = ros::package::getPath("lidar_filtering");
+        calibration_file_path = pkg_path + "/params/lidar_calibration.yaml";
+    }
+
+    // 启动节点时立刻读取一次获得雷达的初始位姿
+    reloadCalibrationYaml(calibration_file_path);
+
+    // 启动过滤参数的 rqt 动态回调 (此时 config 内不再包含标定参数)
     dynamic_reconfigure::Server<lidar_filtering::LidarFilteringConfig> server;
     server.setCallback(boost::bind(&param_callback, _1, _2));
+
+    // 启动后台文件监听线程，传入指定的绝对路径
+    std::thread watcher_thread(watchParamsDirectory, calibration_file_path);
+    watcher_thread.detach();
 
     pub_merged_filter_ = nh.advertise<PointCloud2>("points_filter", 5);
     pub_points_raw = nh.advertise<PointCloud2>("points_raw", 5);
@@ -454,7 +568,6 @@ int main(int argc, char **argv) {
     pub_right_calib_  = nh.advertise<PointCloud2>("points_right_calibration", 5);
     pub_car_marker_   = nh.advertise<visualization_msgs::MarkerArray>("car", 1, true);
     pub_debug_origins_ = nh.advertise<visualization_msgs::MarkerArray>("debug/sensor_origins", 1, true);
-    
     pub_charge_polygon_marker_ = nh.advertise<visualization_msgs::MarkerArray>("charge", 10);
 
     ros::Subscriber sub_can = nh.subscribe("/can_info", 10, &canInfoCallback);
@@ -462,16 +575,14 @@ int main(int argc, char **argv) {
     message_filters::Subscriber<PointCloud2> sub_mid(nh, "/points_mid", 1, ros::TransportHints().tcpNoDelay());
     message_filters::Subscriber<LaserScan> sub_left(nh, "/scan_left", 1, ros::TransportHints().tcpNoDelay());
     message_filters::Subscriber<LaserScan> sub_right(nh, "/scan_right", 1, ros::TransportHints().tcpNoDelay());
-    
     ros::Subscriber sub_lqr = nh.subscribe("/lqr_targetwayp", 1, lqrWaypointCallback);
     
     typedef sync_policies::ApproximateTime<PointCloud2, PointCloud2, LaserScan, LaserScan> SyncPolicy;
     Synchronizer<SyncPolicy> sync(SyncPolicy(10), sub_16, sub_mid, sub_left, sub_right);
     sync.registerCallback(boost::bind(&callback, _1, _2, _3, _4));
 
-    ROS_INFO("Lidar Filtering Node Started with Dual-Interval Scanning Mode.");
+    ROS_INFO("Lidar Filtering Node Started! Watching custom calibration path.");
     ros::MultiThreadedSpinner spinner(4);
     spinner.spin();
     return 0;
 }
-
