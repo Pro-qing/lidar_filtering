@@ -73,15 +73,15 @@ max_y	double	车辆坐标系下，向左的最大裁剪距离
 
 ## 6. 开发状态记录 (Roadmap)
 
-    [x] v1.0: 基础滤波框架构建，支持 PCL 裁剪。
+    [y] v1.0: 基础滤波框架构建，支持 PCL 裁剪。
 
-    [x] v1.1: 集成 Dynamic Reconfigure 动态调参。
+    [y] v1.1: 集成 Dynamic Reconfigure 动态调参。
 
-    [x] Current: 暂时屏蔽两路单线雷达输入（待逻辑优化后恢复）。
+    [y] v2.0: 暂时屏蔽两路单线雷达输入（待逻辑优化后恢复）。
 
-    [ ] Next: 增加点云下采样 (Voxel Grid Filter) 功能。
+    [y] v3.0: 增加参数动态加载功能。
 
-    [ ] Next: 增加统计学离群点去除 (SOR Filter)。
+    [ ] Next: 暂定。
 
 
 ## 7. 维护者
