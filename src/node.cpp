@@ -356,7 +356,7 @@ void callback(const sensor_msgs::PointCloud2::ConstPtr &msg_16, const sensor_msg
 
 // 供 dynamic_reconfigure 回调（仅包含过滤参数，不再包含标定参数）
 void param_callback(lidar_filtering::LidarFilteringConfig &config, uint32_t level) {
-    // 【核心新增】将 GUI 参数透传给 LidarFilterCore
+    // 将 GUI 参数透传给 LidarFilterCore
     if (filter_core_ptr_) {
         filter_core_ptr_->updateDynamicConfig(config);
     }
@@ -440,17 +440,25 @@ void reloadCalibrationYaml(const std::string& filepath) {
     }
 
     if (updated) {
-        ROS_INFO("\033[1;32m[Calibration] Loaded new parameters from lidar_calibration.yaml!\033[0m");
+        ROS_INFO("\033[1;32m[Calibration] Loaded new parameters from %s!\033[0m", filepath.c_str());
     }
 }
 
 // =========================================================================
 // 安全无死锁的 inotify 文件监听线程（使用 poll 解决退出崩溃）
 // =========================================================================
-void watchParamsDirectory() {
-    std::string pkg_path = ros::package::getPath("lidar_filtering");
-    if (pkg_path.empty()) return;
-    std::string watch_dir = pkg_path + "/params";
+void watchParamsDirectory(const std::string& full_path) {
+    if (full_path.empty()) return;
+
+    // 解析出所在目录和文件名
+    size_t last_slash_idx = full_path.find_last_of('/');
+    if (last_slash_idx == std::string::npos) {
+        ROS_ERROR("Invalid calibration file path (no directory provided): %s", full_path.c_str());
+        return;
+    }
+
+    std::string watch_dir = full_path.substr(0, last_slash_idx);
+    std::string watch_file = full_path.substr(last_slash_idx + 1);
 
     int fd = inotify_init1(IN_NONBLOCK);
     if (fd < 0) {
@@ -458,7 +466,7 @@ void watchParamsDirectory() {
         return;
     }
 
-    // 监听文件保存或覆盖
+    // 监听指定的目录
     int wd = inotify_add_watch(fd, watch_dir.c_str(), IN_CLOSE_WRITE | IN_MOVED_TO);
     if (wd < 0) {
         ROS_ERROR("Failed to watch directory: %s", watch_dir.c_str());
@@ -483,7 +491,8 @@ void watchParamsDirectory() {
                 bool should_reload = false;
                 while (i < length) {
                     struct inotify_event *event = (struct inotify_event *) &buffer[i];
-                    if (event->len && std::string(event->name) == "lidar_calibration.yaml") {
+                    // 精确匹配文件名
+                    if (event->len && std::string(event->name) == watch_file) {
                         should_reload = true;
                     }
                     i += sizeof(struct inotify_event) + event->len;
@@ -492,7 +501,7 @@ void watchParamsDirectory() {
                 if (should_reload) {
                     // 等待编辑器释放文件锁
                     std::this_thread::sleep_for(std::chrono::milliseconds(100));
-                    reloadCalibrationYaml(watch_dir + "/lidar_calibration.yaml");
+                    reloadCalibrationYaml(full_path);
                 }
             }
         }
@@ -525,18 +534,26 @@ int main(int argc, char **argv) {
     p_nh.param<std::string>("parent_frame", parent_frame_, "velodyne");
 
     // =========================================================================
-    // 启动节点时立刻读取一次 yaml，获得雷达的初始位姿
+    // 从 launch 获取指定的绝对路径，并加载 yaml
     // =========================================================================
-    std::string pkg_path = ros::package::getPath("lidar_filtering");
-    std::string yaml_path = pkg_path + "/params/lidar_calibration.yaml";
-    reloadCalibrationYaml(yaml_path);
+    std::string calibration_file_path;
+    p_nh.param<std::string>("calibration_file_path", calibration_file_path, "");
+
+    // 容错处理：如果没传入，则退回到 install 目录下的默认地址
+    if (calibration_file_path.empty()) {
+        std::string pkg_path = ros::package::getPath("lidar_filtering");
+        calibration_file_path = pkg_path + "/params/lidar_calibration.yaml";
+    }
+
+    // 启动节点时立刻读取一次获得雷达的初始位姿
+    reloadCalibrationYaml(calibration_file_path);
 
     // 启动过滤参数的 rqt 动态回调 (此时 config 内不再包含标定参数)
     dynamic_reconfigure::Server<lidar_filtering::LidarFilteringConfig> server;
     server.setCallback(boost::bind(&param_callback, _1, _2));
 
-    // 启动后台文件监听线程 (专门负责监控标定参数热更新)
-    std::thread watcher_thread(watchParamsDirectory);
+    // 启动后台文件监听线程，传入指定的绝对路径
+    std::thread watcher_thread(watchParamsDirectory, calibration_file_path);
     watcher_thread.detach();
 
     pub_merged_filter_ = nh.advertise<PointCloud2>("points_filter", 5);
@@ -564,7 +581,7 @@ int main(int argc, char **argv) {
     Synchronizer<SyncPolicy> sync(SyncPolicy(10), sub_16, sub_mid, sub_left, sub_right);
     sync.registerCallback(boost::bind(&callback, _1, _2, _3, _4));
 
-    ROS_INFO("Lidar Filtering Node Started! Calibration params detached from rqt.");
+    ROS_INFO("Lidar Filtering Node Started! Watching custom calibration path.");
     ros::MultiThreadedSpinner spinner(4);
     spinner.spin();
     return 0;

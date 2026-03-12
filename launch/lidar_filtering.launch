@@ -12,6 +12,9 @@
     <arg name="in_right" default="/scan_right" />
     <!-- <arg name="flag_scan" default="/lqr_targetwayp "> -->
 
+    <!-- lidar_calibration.yaml文件路径指定 -->
+    <arg name="calibration_file_path" default="/home/getq/lidar_filtering/src/lidar_filtering/params/lidar_calibration.yaml" />
+
     <!-- 过滤后输出话题 (Filtered Output) -->
     <arg name="out_filter_main" default="/points_16_filter" />
     <arg name="out_filter_mid" default="/points_mid_filter" />
@@ -106,6 +109,9 @@
         <rosparam file="$(find lidar_filtering)/params/vehicle_size.yaml" command="load"/>
         <param name="parent_frame" value="$(arg parent_frame)" />
         
+        <!-- 将路径作为参数传给底层 C++ 节点 -->
+        <param name="calibration_file_path" value="$(arg calibration_file_path)" />
+
         <!-- 环境过滤参数 -->
         <param name="height_max" value="0.0" />
         <!-- 高度过滤 -->
