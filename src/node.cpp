@@ -522,6 +522,8 @@ int main(int argc, char **argv) {
     p_nh.param("right_a", f_right.a, 0.0); p_nh.param("right_b", f_right.b, 0.0);
     p_nh.param("right_c", f_right.c, 0.0); p_nh.param("right_d", f_right.d, 0.0);
 
+    std::cout << "PCL version:" << PCL_VERSION << std::endl;
+
     XmlRpc::XmlRpcValue carpoints;
     p_nh.getParam("rect", carpoints);
     if (carpoints.getType() == XmlRpc::XmlRpcValue::TypeArray) {

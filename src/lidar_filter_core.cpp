@@ -67,7 +67,7 @@ LidarFilterCore::LidarFilterCore(ros::NodeHandle &nh, ros::NodeHandle &private_n
 }
 
 // =========================================================
-// 【新增】接收 RQT 动态下发的配置参数
+// 接收 RQT 动态下发的配置参数
 // =========================================================
 void LidarFilterCore::updateDynamicConfig(const lidar_filtering::LidarFilteringConfig& config) {
     std::lock_guard<std::mutex> lock(core_param_mutex_);
@@ -187,7 +187,7 @@ void LidarFilterCore::filterScanMsgDualInterval(sensor_msgs::LaserScan& scan,
 void LidarFilterCore::checkScanConsistency(sensor_msgs::LaserScan& left, sensor_msgs::LaserScan& right, 
                                            double left_yaw, double right_yaw)
 {
-    // 【新增】安全获取动态参数
+    // 安全获取动态参数
     bool enable;
     double min_angle, max_angle, diff_dist;
     {
@@ -253,7 +253,7 @@ void LidarFilterCore::pointcloud_filter(pcl::PointCloud<pcl::PointXYZI>::Ptr in_
     filter_cloud_ptr->clear();
     filter_cloud_ptr->reserve(in_cloud_ptr->size() * 0.5);
 
-    // 【新增】安全拷贝局部变量（防线程冲突）
+    // 安全拷贝局部变量（防线程冲突）
     double local_crop_radius, local_crop_radius_x, z_min, z_max, z_floor;
     double local_voxel_filter;
     bool do_floor, charge_active, do_time_consistency;
@@ -336,7 +336,7 @@ void LidarFilterCore::pointcloud_filter_pcl(pcl::PointCloud<pcl::PointXYZI>::Ptr
 {
     if (in_cloud_ptr->empty()) return;
 
-    // 【新增】安全拷贝局部变量
+    // 安全拷贝局部变量
     double local_crop_radius, local_crop_radius_x, z_min, z_max;
     double local_voxel, local_voxel_eleva;
     bool do_floor, do_radius_filter;

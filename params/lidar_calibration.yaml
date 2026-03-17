@@ -8,26 +8,41 @@ tf_calibration:
   main_yaw: 0.0
   main_pitch: 0.0
   main_roll: 0.0  
-  
+  # 补盲雷达
   top_x: 0.183
   top_y: -0.004
   top_z: -0.36
   top_yaw: -3.098
   top_pitch: 2.9534
   top_roll: -0.027
-
+  # 左前单线
   left_x: 0.22
   left_y: 0.33
   left_z: -1.8
   left_yaw: -2.08
   left_pitch: 0.0
   left_roll: 3.1415926
-
+  # 右前单线
   right_x: 0.21
   right_y: -0.36
   right_z: -1.8
   right_yaw: 2.17
   right_pitch: 0.0
   right_roll: 3.1415926
+  # 左后单线
+  bleft_x: 0.0
+  bleft_y: 0.0
+  bleft_z: 0.0
+  bleft_yaw: 0.0
+  bleft_pitch: 0.0
+  bleft_roll: 0.0
+  # 右后单线
+  bright_x: 0.0
+  bright_y: 0.0
+  bright_z: 0.0
+  bright_yaw: 0.0
+  bright_pitch: 0.0
+  bright_roll: 0.0
+  
   
   
