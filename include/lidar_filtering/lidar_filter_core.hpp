@@ -15,7 +15,7 @@
 #include <tf2_ros/transform_listener.h>
 #include <pcl/common/common.h> 
 
-// 【新增】包含动态配置的头文件
+// 包含动态配置的头文件
 #include <lidar_filtering/LidarFilteringConfig.h>
 
 #include <vector>
@@ -28,7 +28,7 @@ public:
     LidarFilterCore(ros::NodeHandle &nh, ros::NodeHandle &private_nh);
     ~LidarFilterCore() = default;
 
-    // 【新增】接收 RQT 下发的动态参数更新
+    // 接收 RQT 下发的动态参数更新
     void updateDynamicConfig(const lidar_filtering::LidarFilteringConfig& config);
 
     // 通用点云滤波器
@@ -74,7 +74,7 @@ private:
     ros::Publisher marker_pub_;
     ros::Timer charge_timer_;
 
-    // 【新增】参数访问保护锁
+    // 参数访问保护锁
     std::mutex core_param_mutex_;
 
     // Params
@@ -107,6 +107,10 @@ private:
     std::mutex history_mutex_;
     std::vector<geometry_msgs::Pose> fliterpose_;
     geometry_msgs::Pose transPose_;
+
+    // 【新增】用于消除 OpenMP 线程内部动态分配的缓冲池
+    std::vector<std::vector<pcl::PointXYZI>> omp_buffers_filter_;
+    std::vector<std::vector<pcl::PointXYZI>> omp_buffers_vehicle_;
 
     void keyPointCallback(const autoware_msgs::KeyPointArrayConstPtr &msg);
     void ctrolCallback(const std_msgs::Int8ConstPtr &msg);
