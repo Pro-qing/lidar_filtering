@@ -307,6 +307,8 @@ void callback(const sensor_msgs::PointCloud2::ConstPtr &msg_16, const sensor_msg
 
     size_t total_filt = buf_main.filt->size() + buf_mid.filt->size() + buf_left.filt->size() + buf_right.filt->size();
     
+    //单线过滤，开启的话，直接复制粘贴放入这里即可。
+
     if (pub_merged_filter_.getNumSubscribers() > 0) {
         merged_cloud->reserve(total_filt);
         *merged_cloud += *buf_main.filt; 

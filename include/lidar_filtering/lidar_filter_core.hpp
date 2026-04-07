@@ -14,6 +14,7 @@
 #include <tf2_ros/buffer.h>
 #include <tf2_ros/transform_listener.h>
 #include <pcl/common/common.h> 
+#include <pcl/filters/radius_outlier_removal.h>
 
 // 包含动态配置的头文件
 #include <lidar_filtering/LidarFilteringConfig.h>
