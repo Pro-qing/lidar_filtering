@@ -38,7 +38,7 @@
 
     <!-- 地牛三号车 测试车辆数据 补盲TF参数 -->
     
-    <arg name="top_x" default="0.0" />  
+    <!-- <arg name="top_x" default="0.0" />  
     <arg name="top_y" default="0.0" /> 
     <arg name="top_z" default="0.0" />
     <arg name="top_yaw" default="0.0" /> 
@@ -58,6 +58,27 @@
     <arg name="right_z" default="0.0" />
     <arg name="right_yaw" default="0.0" /> 
     <arg name="right_pitch" default="0.0" /> 
+    <arg name="right_roll" default="0.0" /> -->
+
+    <arg name="top_x" default="0.19" />  
+    <arg name="top_y" default="0.0" /> 
+    <arg name="top_z" default="-0.23" />
+    <arg name="top_yaw" default="-0.04" /> 
+    <arg name="top_pitch" default="0.0" /> 
+    <arg name="top_roll" default="3.14" />
+
+    <arg name="left_x" default="0.25" /> 
+    <arg name="left_y" default="0.35" /> 
+    <arg name="left_z" default="-1.75" />
+    <arg name="left_yaw" default="-0.54" /> 
+    <arg name="left_pitch" default="3.1415926" /> 
+    <arg name="left_roll" default="0.0" />
+
+    <arg name="right_x" default="0.19" /> 
+    <arg name="right_y" default="-0.46" /> 
+    <arg name="right_z" default="-1.75" />
+    <arg name="right_yaw" default="0.54" /> 
+    <arg name="right_pitch" default="3.1415926" /> 
     <arg name="right_roll" default="0.0" />
 
     <!-- 单线雷达角度过滤参数
@@ -116,7 +137,7 @@
         <!-- 环境过滤参数 -->
         <param name="height_max" value="0.0" />
         <!-- 高度过滤 -->
-        <param name="height_min" value="-1.85" />
+        <param name="height_min" value="-1.85" />  <!--16线雷达高度 + 最高坡度-->
         <param name="height_filt" value="-5.0" />
         <param name="filter_floor" value="true" />
 

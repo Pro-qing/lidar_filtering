@@ -9,7 +9,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 add_definitions(-DPCL_NO_PRECOMPILE)
 
 # 3. 指定寻找 PCL 1.8
-find_package(PCL 1.8 EXACT REQUIRED COMPONENTS common io filters segmentation sample_consensus kdtree search)
+find_package(PCL 1.8  REQUIRED COMPONENTS common io filters segmentation sample_consensus kdtree search)
 
 # 包含 PCL 的头文件和库
 include_directories(${PCL_INCLUDE_DIRS})
