@@ -129,37 +129,47 @@ class VehiclePreviewWidget(QWidget):
             def build_poly(pt_list):
                 poly = QPolygonF()
                 valid = []
-                for p in pt_list:
+                for i, p in enumerate(pt_list):
                     if isinstance(p, dict) and 'x' in p and 'y' in p:
                         rx, ry = safe_float(p['x']), safe_float(p['y'])
                         qx = cx - (ry * scale)
                         qy = cy - (rx * scale)
                         pt = QPointF(qx, qy)
                         poly.append(pt)
-                        valid.append(pt)
+                        valid.append((pt, i)) # 携带原始索引，用于显示 P1, P2...
                 return poly, valid
 
+            # 绘制底图参考（车辆本体）
             if self.ref_points:
                 ref_poly, _ = build_poly(self.ref_points)
                 painter.setPen(QPen(QColor(0, 255, 255), 2))
                 painter.setBrush(QColor(0, 255, 255, 40))
                 painter.drawPolygon(ref_poly)
 
+            # 绘制当前安全框
             if self.points and isinstance(self.points, list):
                 main_poly, valid_pts = build_poly(self.points)
                 painter.setPen(QPen(self.line_color, 2))
                 painter.setBrush(self.fill_color)
                 painter.drawPolygon(main_poly)
 
-                painter.setBrush(QColor(255, 255, 0))
-                painter.setPen(Qt.NoPen)
-                for pt in valid_pts:
-                    painter.drawEllipse(pt, 3, 3)
+                # 绘制顶点和 P1, P2 编号
+                painter.setFont(QFont("Arial", 8, QFont.Bold))
+                for pt, idx in valid_pts:
+                    # 绘制黄点
+                    painter.setBrush(QColor(255, 255, 0))
+                    painter.setPen(Qt.NoPen)
+                    painter.drawEllipse(pt, 4, 4)
+                    
+                    # 绘制编号文字 (白色)
+                    painter.setPen(QPen(QColor(255, 255, 255)))
+                    painter.drawText(int(pt.x()) + 6, int(pt.y()) - 6, f"P{idx+1}")
+
         except Exception:
             pass
 
 # =====================================================================
-# 动态多边形编辑器组件 (用于安全框的动态增删)
+# 动态多边形编辑器组件 (带有一键快捷扩缩功能)
 # =====================================================================
 class SafePolygonEditor(QWidget):
     def __init__(self, init_points, raw_key, yaml_data_source, hidden_text_edit, preview_widget):
@@ -176,7 +186,29 @@ class SafePolygonEditor(QWidget):
         self.layout = QVBoxLayout(self)
         self.layout.setContentsMargins(0, 0, 0, 0)
         
-        # 为了应对点数过多，增加一个内部的滚动区域
+        # 1. 快捷整体扩缩控制区
+        adj_group = QGroupBox("快捷整体扩缩 (正数扩大，负数缩小)")
+        adj_group.setStyleSheet("QGroupBox { background-color: #f9f9f9; border: 1px solid #ccc; border-radius: 4px; margin-bottom: 10px; padding-top: 15px; }")
+        adj_layout = QGridLayout(adj_group)
+        
+        self.sb_adj_f = QDoubleSpinBox(); self.sb_adj_f.setRange(-10, 10); self.sb_adj_f.setSingleStep(0.05)
+        self.sb_adj_b = QDoubleSpinBox(); self.sb_adj_b.setRange(-10, 10); self.sb_adj_b.setSingleStep(0.05)
+        self.sb_adj_l = QDoubleSpinBox(); self.sb_adj_l.setRange(-10, 10); self.sb_adj_l.setSingleStep(0.05)
+        self.sb_adj_r = QDoubleSpinBox(); self.sb_adj_r.setRange(-10, 10); self.sb_adj_r.setSingleStep(0.05)
+        
+        adj_layout.addWidget(QLabel("向前(m):"), 0, 0); adj_layout.addWidget(self.sb_adj_f, 0, 1)
+        adj_layout.addWidget(QLabel("向后(m):"), 0, 2); adj_layout.addWidget(self.sb_adj_b, 0, 3)
+        adj_layout.addWidget(QLabel("向左(m):"), 1, 0); adj_layout.addWidget(self.sb_adj_l, 1, 1)
+        adj_layout.addWidget(QLabel("向右(m):"), 1, 2); adj_layout.addWidget(self.sb_adj_r, 1, 3)
+        
+        btn_apply_adj = QPushButton("一键应用到所有点")
+        btn_apply_adj.setStyleSheet("background-color: #9C27B0; color: white; font-weight: bold; border-radius: 4px;")
+        btn_apply_adj.clicked.connect(self.apply_bulk_adjustment)
+        adj_layout.addWidget(btn_apply_adj, 0, 4, 2, 1)
+        
+        self.layout.addWidget(adj_group)
+
+        # 2. 坐标点详细列表
         self.scroll_area = QScrollArea()
         self.scroll_area.setWidgetResizable(True)
         self.scroll_area.setStyleSheet("QScrollArea { border: none; }")
@@ -188,6 +220,7 @@ class SafePolygonEditor(QWidget):
         
         self.layout.addWidget(self.scroll_area)
         
+        # 3. 添加点位按钮
         btn_layout = QHBoxLayout()
         self.add_btn = QPushButton("+ 添加点位")
         self.add_btn.setStyleSheet("color: white; background-color: #2196F3; font-weight: bold; border-radius: 4px; padding: 5px;")
@@ -199,6 +232,45 @@ class SafePolygonEditor(QWidget):
         self.spin_pairs = []
         self.render_points()
 
+    # 应用快捷扩缩算法
+    def apply_bulk_adjustment(self):
+        df = self.sb_adj_f.value()
+        db = self.sb_adj_b.value()
+        dl = self.sb_adj_l.value()
+        dr = self.sb_adj_r.value()
+        
+        if df == 0 and db == 0 and dl == 0 and dr == 0:
+            return
+            
+        for sx, sy in self.spin_pairs:
+            x = sx.value()
+            y = sy.value()
+            
+            # X > 0 在前，X < 0 在后
+            if x > 0.01: x += df
+            elif x < -0.01: x -= db  # db是正数扩大，相当于X轴变负数，减去db
+            
+            # Y > 0 在左，Y < 0 在右
+            if y > 0.01: y += dl
+            elif y < -0.01: y -= dr
+            
+            # 临时屏蔽信号，防止循环更新
+            sx.blockSignals(True)
+            sy.blockSignals(True)
+            sx.setValue(x)
+            sy.setValue(y)
+            sx.blockSignals(False)
+            sy.blockSignals(False)
+            
+        # 清零输入框
+        self.sb_adj_f.setValue(0)
+        self.sb_adj_b.setValue(0)
+        self.sb_adj_l.setValue(0)
+        self.sb_adj_r.setValue(0)
+        
+        # 触发一次统一画面更新
+        self.on_value_changed()
+
     def render_points(self):
         for i in reversed(range(self.points_layout.count())): 
             widget = self.points_layout.itemAt(i).widget()
@@ -208,8 +280,8 @@ class SafePolygonEditor(QWidget):
         self.spin_pairs.clear()
         
         for i, pt in enumerate(self.points):
-            lbl_p = QLabel(f"点 {i+1}:")
-            lbl_p.setStyleSheet("color: #555; font-weight: bold;")
+            lbl_p = QLabel(f"P{i+1}:")
+            lbl_p.setStyleSheet("color: #D32F2F; font-weight: bold;")
             
             sb_x = QDoubleSpinBox()
             sb_x.setRange(-50.0, 50.0)
@@ -269,10 +341,6 @@ class SafePolygonEditor(QWidget):
         self.hidden_text_edit.setPlainText(b.getvalue())
         self.hidden_text_edit.blockSignals(False)
 
-
-# =====================================================================
-# 主界面
-# =====================================================================
 class ConfigEditorGUI(QWidget):
     def __init__(self):
         super().__init__()
@@ -297,7 +365,7 @@ class ConfigEditorGUI(QWidget):
 
     def init_ui(self):
         self.setWindowTitle("Lidar Filtering 参数配置工具")
-        self.resize(850, 950)
+        self.resize(900, 950)
         main_layout = QVBoxLayout(self)
         tabs = QTabWidget()
         
@@ -328,7 +396,6 @@ class ConfigEditorGUI(QWidget):
                 h_layout = QHBoxLayout()
 
                 if raw_key == "rect":
-                    # ================= 车辆本体 rect (物理参数生成模式) =================
                     form_widget = QWidget()
                     form_layout = QFormLayout(form_widget)
 
@@ -399,7 +466,6 @@ class ConfigEditorGUI(QWidget):
                     update_rect()
 
                 else:
-                    # ================= 安全框 (按点输入模式，支持动态增删，实时联动) =================
                     text_editor = QTextEdit()
                     text_editor.hide()
                     widgets_dict[raw_key] = text_editor
@@ -408,9 +474,7 @@ class ConfigEditorGUI(QWidget):
                     if ref_polygon:
                         preview.set_reference_points(ref_polygon)
 
-                    # 调用专门为安全框编写的编辑器模块
                     editor_widget = SafePolygonEditor(value, raw_key, yaml_data_source, text_editor, preview)
-                    
                     h_layout.addWidget(editor_widget, stretch=1)
                     h_layout.addWidget(preview, stretch=1)
 
@@ -418,7 +482,6 @@ class ConfigEditorGUI(QWidget):
                 layout.addRow(group_box)
                 continue
 
-            # 常规基础类型控件
             lbl = QLabel(custom_label + " :")
             lbl.setWordWrap(True)
             lbl.setStyleSheet("font-weight: bold; margin-top: 5px;")
@@ -473,7 +536,6 @@ class ConfigEditorGUI(QWidget):
             QMessageBox.critical(self, "错误", f"保存失败:\n{e}")
             return False
 
-    # ========================== 1. 基本车辆 YAML ==========================
     def setup_yaml_tab(self):
         layout = QVBoxLayout(self.tab_yaml)
         top_layout = QHBoxLayout()
@@ -511,7 +573,6 @@ class ConfigEditorGUI(QWidget):
         if self.save_generic_yaml(self.yaml_widgets, self.yaml_data, self.yaml_path, ALLOWED_YAML_PARAMS):
             QMessageBox.information(self, "提示", "填写成功,请重启系统。")
 
-    # ========================== 2. 车辆安全框 YAML ==========================
     def setup_safe_tab(self):
         layout = QVBoxLayout(self.tab_safe)
         top_layout = QHBoxLayout()
@@ -550,7 +611,6 @@ class ConfigEditorGUI(QWidget):
         if self.save_generic_yaml(self.safe_widgets, self.safe_yaml_data, self.safe_yaml_path, ALLOWED_SAFE_YAML_PARAMS):
             QMessageBox.information(self, "提示", "填写成功,请重启系统。")
 
-    # ========================== 3. CFG ==========================
     def setup_cfg_tab(self):
         layout = QVBoxLayout(self.tab_cfg)
         top_layout = QHBoxLayout()
