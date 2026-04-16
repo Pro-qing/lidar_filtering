@@ -9,14 +9,25 @@ from PyQt5.QtWidgets import (QApplication, QWidget, QVBoxLayout, QHBoxLayout,
                              QSpinBox, QDoubleSpinBox, QCheckBox, QScrollArea, 
                              QMessageBox, QTextEdit, QLineEdit, QGroupBox, QGridLayout)
 from PyQt5.QtGui import QPainter, QColor, QPen, QPolygonF, QFont
-from PyQt5.QtCore import Qt, QPointF
+from PyQt5.QtCore import Qt, QPointF, pyqtSignal, QObject
 
 # 使用 ruamel.yaml 保留原文件的所有注释和缩进格式
 from ruamel.yaml import YAML
 from ruamel.yaml.compat import StringIO
+from ruamel.yaml.comments import CommentedMap  # 强制生成单行字典格式
+
+# ================= ROS 相关导入 =================
+HAS_ROS = False
+try:
+    import rospy
+    from sensor_msgs.msg import PointCloud2
+    import sensor_msgs.point_cloud2 as pc2
+    HAS_ROS = True
+except ImportError:
+    print("未检测到 rospy 或 sensor_msgs，点云显示功能将被禁用。")
 
 # =====================================================================
-# 参数显示映射表（字典）
+# 参数显示映射表
 # =====================================================================
 
 ALLOWED_YAML_PARAMS = {
@@ -61,10 +72,108 @@ ALLOWED_CFG_PARAMS = {
 
 def safe_float(val, default=0.0):
     if val is None: return default
-    try:
-        return float(val)
-    except (ValueError, TypeError):
-        return default
+    try: return float(val)
+    except (ValueError, TypeError): return default
+
+def create_flow_point(x, y):
+    pt = CommentedMap()
+    pt['x'] = x
+    pt['y'] = y
+    pt.fa.set_flow_style()
+    return pt
+
+# =====================================================================
+# UI 样式库 (QSS)
+# =====================================================================
+GLOBAL_STYLE = """
+QWidget {
+    font-family: "Segoe UI", "Microsoft YaHei", Arial, sans-serif;
+    font-size: 14px;
+    color: #333333;
+    background-color: #F5F7FA;
+}
+QTabWidget::pane {
+    border: 1px solid #E0E0E0;
+    background-color: #FFFFFF;
+    border-radius: 8px;
+    margin-top: -1px;
+}
+QTabBar::tab {
+    background-color: #E0E0E0;
+    color: #666666;
+    border-top-left-radius: 6px;
+    border-top-right-radius: 6px;
+    padding: 10px 20px;
+    margin-right: 2px;
+    font-weight: bold;
+}
+QTabBar::tab:selected {
+    background-color: #FFFFFF;
+    color: #1976D2;
+    border: 1px solid #E0E0E0;
+    border-bottom: 2px solid #1976D2;
+}
+QGroupBox {
+    background-color: #FFFFFF;
+    border: 1px solid #D6D6D6;
+    border-radius: 6px;
+    margin-top: 18px;
+    padding-top: 15px;
+}
+QGroupBox::title {
+    subcontrol-origin: margin;
+    subcontrol-position: top left;
+    left: 15px;
+    padding: 0 5px;
+    color: #1976D2;
+    font-weight: bold;
+    font-size: 15px;
+}
+QPushButton {
+    border-radius: 5px;
+    padding: 8px 15px;
+    font-weight: bold;
+    border: none;
+}
+QPushButton:hover { opacity: 0.8; }
+QPushButton:pressed { background-color: rgba(0, 0, 0, 0.1); }
+QDoubleSpinBox, QSpinBox, QLineEdit {
+    border: 1px solid #BDBDBD;
+    border-radius: 4px;
+    padding: 5px;
+    background-color: #FAFAFA;
+}
+QDoubleSpinBox:focus, QSpinBox:focus, QLineEdit:focus {
+    border: 1px solid #1976D2;
+    background-color: #FFFFFF;
+}
+QScrollArea { border: none; background-color: transparent; }
+QScrollArea > QWidget > QWidget { background-color: transparent; }
+"""
+
+# =====================================================================
+# ROS 点云监听
+# =====================================================================
+class ROSListener(QObject):
+    cloud_updated = pyqtSignal(list)
+
+    def __init__(self):
+        super().__init__()
+        if HAS_ROS:
+            self.sub = rospy.Subscriber("/points_filter", PointCloud2, self.pc_callback, queue_size=1)
+
+    def pc_callback(self, msg):
+        points = []
+        try:
+            gen = pc2.read_points(msg, field_names=("x", "y"), skip_nans=True)
+            for i, p in enumerate(gen):
+                if i % 3 == 0:
+                    x, y = p[0], p[1]
+                    if -15.0 < x < 15.0 and -15.0 < y < 15.0:
+                        points.append((x, y))
+            self.cloud_updated.emit(points)
+        except Exception:
+            pass
 
 # =====================================================================
 # 自定义画板
@@ -74,8 +183,9 @@ class VehiclePreviewWidget(QWidget):
         super().__init__()
         self.points = []       
         self.ref_points = []   
-        self.setMinimumSize(300, 300)
-        self.fill_color = QColor(color_r, color_g, color_b, 50)
+        self.cloud_points = []  
+        self.setMinimumSize(320, 320)
+        self.fill_color = QColor(color_r, color_g, color_b, 60)
         self.line_color = QColor(color_r, color_g, color_b)
 
     def set_points(self, points):
@@ -85,46 +195,58 @@ class VehiclePreviewWidget(QWidget):
     def set_reference_points(self, points):
         self.ref_points = points
         self.update()
+        
+    def set_cloud_points(self, points):
+        self.cloud_points = points
+        self.update()
 
     def paintEvent(self, event):
         painter = QPainter(self)
         try:
             painter.setRenderHint(QPainter.Antialiasing)
-            painter.fillRect(self.rect(), QColor("#1e1e1e"))
+            painter.fillRect(self.rect(), QColor("#121212"))
 
             w, h = self.width(), self.height()
             cx, cy = w / 2, h / 2
 
-            # 坐标轴
-            painter.setPen(QPen(QColor(255, 50, 50), 1, Qt.DashLine))
+            max_range = 1.0 
+            all_pts = []
+            if isinstance(self.points, list): all_pts += self.points
+            if isinstance(self.ref_points, list): all_pts += self.ref_points
+            
+            for p in all_pts:
+                if isinstance(p, dict):
+                    max_range = max(max_range, abs(safe_float(p.get('x'))), abs(safe_float(p.get('y'))))
+            scale = (min(w, h) / 2.0) / (max_range * 1.25) if max_range > 0 else 1.0
+
+            if self.cloud_points:
+                painter.setPen(QPen(QColor(255, 255, 255, 140), 2))
+                cloud_poly = QPolygonF()
+                for cx_pt, cy_pt in self.cloud_points:
+                    qx = cx - (cy_pt * scale)
+                    qy = cy - (cx_pt * scale)
+                    cloud_poly.append(QPointF(qx, qy))
+                painter.drawPoints(cloud_poly)
+
+            painter.setPen(QPen(QColor(255, 80, 80, 150), 1, Qt.DashLine))
             painter.drawLine(int(cx), 0, int(cx), int(h)) 
-            painter.setPen(QPen(QColor(50, 255, 50), 1, Qt.DashLine))
+            painter.setPen(QPen(QColor(80, 255, 80, 150), 1, Qt.DashLine))
             painter.drawLine(0, int(cy), int(w), int(cy)) 
 
             painter.setPen(QPen(QColor(200, 200, 200)))
-            painter.setFont(QFont("Arial", 8))
+            painter.setFont(QFont("Microsoft YaHei", 8))
             painter.drawText(int(cx) + 5, 15, "X(前)")
             painter.drawText(5, int(cy) - 5, "Y(左)")
 
+            painter.setBrush(QColor(255, 255, 255, 50))
+            painter.setPen(Qt.NoPen)
+            painter.drawEllipse(QPointF(cx, cy), 10, 10)
+            painter.setBrush(QColor(255, 255, 255))
+            painter.drawEllipse(QPointF(cx, cy), 4, 4)
+            
             painter.setPen(QPen(QColor(255, 255, 255)))
             painter.setFont(QFont("Arial", 9, QFont.Bold))
-            painter.drawText(int(cx) + 6, int(cy) - 6, "velodyne")
-            painter.setBrush(QColor(255, 255, 255))
-            painter.setPen(Qt.NoPen)
-            painter.drawEllipse(QPointF(cx, cy), 3.5, 3.5)
-
-            if self.ref_points:
-                painter.setPen(QPen(QColor(0, 255, 255)))
-                painter.drawText(10, 25, "■ 青色: 车辆本体")
-                painter.setPen(QPen(self.line_color))
-                painter.drawText(10, 40, "■ 橙色: 正在编辑的框")
-
-            max_range = 1.0 
-            for p in (self.points + self.ref_points):
-                if isinstance(p, dict):
-                    max_range = max(max_range, abs(safe_float(p.get('x'))), abs(safe_float(p.get('y'))))
-            
-            scale = (min(w, h) / 2.0) / (max_range * 1.15) if max_range > 0 else 1.0
+            painter.drawText(int(cx) + 12, int(cy) - 12, "velodyne")
 
             def build_poly(pt_list):
                 poly = QPolygonF()
@@ -136,42 +258,35 @@ class VehiclePreviewWidget(QWidget):
                         qy = cy - (rx * scale)
                         pt = QPointF(qx, qy)
                         poly.append(pt)
-                        valid.append((pt, i)) # 携带原始索引，用于显示 P1, P2...
+                        valid.append((pt, i))
                 return poly, valid
 
-            # 绘制底图参考（车辆本体）
             if self.ref_points:
                 ref_poly, _ = build_poly(self.ref_points)
-                painter.setPen(QPen(QColor(0, 255, 255), 2))
-                painter.setBrush(QColor(0, 255, 255, 40))
+                painter.setPen(QPen(QColor(0, 255, 255, 150), 2))
+                painter.setBrush(QColor(0, 255, 255, 30))
                 painter.drawPolygon(ref_poly)
 
-            # 绘制当前安全框
             if self.points and isinstance(self.points, list):
                 main_poly, valid_pts = build_poly(self.points)
                 painter.setPen(QPen(self.line_color, 2))
                 painter.setBrush(self.fill_color)
                 painter.drawPolygon(main_poly)
 
-                # 绘制顶点和 P1, P2 编号
-                painter.setFont(QFont("Arial", 8, QFont.Bold))
+                painter.setFont(QFont("Arial", 9, QFont.Bold))
                 for pt, idx in valid_pts:
-                    # 绘制黄点
                     painter.setBrush(QColor(255, 255, 0))
                     painter.setPen(Qt.NoPen)
-                    painter.drawEllipse(pt, 4, 4)
-                    
-                    # 绘制编号文字 (白色)
+                    painter.drawEllipse(pt, 5, 5)
                     painter.setPen(QPen(QColor(255, 255, 255)))
-                    painter.drawText(int(pt.x()) + 6, int(pt.y()) - 6, f"P{idx+1}")
-
+                    painter.drawText(int(pt.x()) + 8, int(pt.y()) - 8, f"P{idx+1}")
         except Exception:
             pass
 
 # =====================================================================
-# 动态多边形编辑器组件 (带有一键快捷扩缩功能)
+# 统一动态多边形编辑器组件 (用于车体 & 安全框)
 # =====================================================================
-class SafePolygonEditor(QWidget):
+class PolygonEditor(QWidget):
     def __init__(self, init_points, raw_key, yaml_data_source, hidden_text_edit, preview_widget):
         super().__init__()
         self.points = []
@@ -186,9 +301,7 @@ class SafePolygonEditor(QWidget):
         self.layout = QVBoxLayout(self)
         self.layout.setContentsMargins(0, 0, 0, 0)
         
-        # 1. 快捷整体扩缩控制区
-        adj_group = QGroupBox("快捷整体扩缩 (正数扩大，负数缩小)")
-        adj_group.setStyleSheet("QGroupBox { background-color: #f9f9f9; border: 1px solid #ccc; border-radius: 4px; margin-bottom: 10px; padding-top: 15px; }")
+        adj_group = QGroupBox("快捷整体扩缩 (正数向外扩大，负数向内缩小)")
         adj_layout = QGridLayout(adj_group)
         
         self.sb_adj_f = QDoubleSpinBox(); self.sb_adj_f.setRange(-10, 10); self.sb_adj_f.setSingleStep(0.05)
@@ -196,135 +309,90 @@ class SafePolygonEditor(QWidget):
         self.sb_adj_l = QDoubleSpinBox(); self.sb_adj_l.setRange(-10, 10); self.sb_adj_l.setSingleStep(0.05)
         self.sb_adj_r = QDoubleSpinBox(); self.sb_adj_r.setRange(-10, 10); self.sb_adj_r.setSingleStep(0.05)
         
-        adj_layout.addWidget(QLabel("向前(m):"), 0, 0); adj_layout.addWidget(self.sb_adj_f, 0, 1)
-        adj_layout.addWidget(QLabel("向后(m):"), 0, 2); adj_layout.addWidget(self.sb_adj_b, 0, 3)
-        adj_layout.addWidget(QLabel("向左(m):"), 1, 0); adj_layout.addWidget(self.sb_adj_l, 1, 1)
-        adj_layout.addWidget(QLabel("向右(m):"), 1, 2); adj_layout.addWidget(self.sb_adj_r, 1, 3)
+        adj_layout.addWidget(QLabel("向前:"), 0, 0); adj_layout.addWidget(self.sb_adj_f, 0, 1)
+        adj_layout.addWidget(QLabel("向后:"), 0, 2); adj_layout.addWidget(self.sb_adj_b, 0, 3)
+        adj_layout.addWidget(QLabel("向左:"), 1, 0); adj_layout.addWidget(self.sb_adj_l, 1, 1)
+        adj_layout.addWidget(QLabel("向右:"), 1, 2); adj_layout.addWidget(self.sb_adj_r, 1, 3)
         
-        btn_apply_adj = QPushButton("一键应用到所有点")
-        btn_apply_adj.setStyleSheet("background-color: #9C27B0; color: white; font-weight: bold; border-radius: 4px;")
-        btn_apply_adj.clicked.connect(self.apply_bulk_adjustment)
-        adj_layout.addWidget(btn_apply_adj, 0, 4, 2, 1)
-        
+        btn_apply = QPushButton("一键应用")
+        btn_apply.setStyleSheet("background-color: #673AB7; color: white;")
+        btn_apply.clicked.connect(self.apply_bulk_adjustment)
+        adj_layout.addWidget(btn_apply, 0, 4, 2, 1)
         self.layout.addWidget(adj_group)
 
-        # 2. 坐标点详细列表
-        self.scroll_area = QScrollArea()
-        self.scroll_area.setWidgetResizable(True)
-        self.scroll_area.setStyleSheet("QScrollArea { border: none; }")
-        
+        self.scroll = QScrollArea()
+        self.scroll.setWidgetResizable(True)
         self.points_container = QWidget()
         self.points_layout = QGridLayout(self.points_container)
-        self.points_layout.setContentsMargins(0, 0, 0, 0)
-        self.scroll_area.setWidget(self.points_container)
+        self.points_layout.setContentsMargins(5, 5, 5, 5)
+        self.points_layout.setHorizontalSpacing(10)
+        self.scroll.setWidget(self.points_container)
+        self.layout.addWidget(self.scroll)
         
-        self.layout.addWidget(self.scroll_area)
-        
-        # 3. 添加点位按钮
-        btn_layout = QHBoxLayout()
         self.add_btn = QPushButton("+ 添加点位")
-        self.add_btn.setStyleSheet("color: white; background-color: #2196F3; font-weight: bold; border-radius: 4px; padding: 5px;")
+        self.add_btn.setStyleSheet("background-color: #2196F3; color: white;")
         self.add_btn.clicked.connect(self.add_point)
-        btn_layout.addWidget(self.add_btn)
-        btn_layout.addStretch()
-        self.layout.addLayout(btn_layout)
+        self.layout.addWidget(self.add_btn)
         
         self.spin_pairs = []
         self.render_points()
 
-    # 应用快捷扩缩算法
     def apply_bulk_adjustment(self):
-        df = self.sb_adj_f.value()
-        db = self.sb_adj_b.value()
-        dl = self.sb_adj_l.value()
-        dr = self.sb_adj_r.value()
-        
-        if df == 0 and db == 0 and dl == 0 and dr == 0:
-            return
-            
+        df, db, dl, dr = self.sb_adj_f.value(), self.sb_adj_b.value(), self.sb_adj_l.value(), self.sb_adj_r.value()
         for sx, sy in self.spin_pairs:
-            x = sx.value()
-            y = sy.value()
-            
-            # X > 0 在前，X < 0 在后
+            x, y = sx.value(), sy.value()
             if x > 0.01: x += df
-            elif x < -0.01: x -= db  # db是正数扩大，相当于X轴变负数，减去db
-            
-            # Y > 0 在左，Y < 0 在右
+            elif x < -0.01: x -= db 
             if y > 0.01: y += dl
             elif y < -0.01: y -= dr
-            
-            # 临时屏蔽信号，防止循环更新
-            sx.blockSignals(True)
-            sy.blockSignals(True)
-            sx.setValue(x)
-            sy.setValue(y)
-            sx.blockSignals(False)
-            sy.blockSignals(False)
-            
-        # 清零输入框
-        self.sb_adj_f.setValue(0)
-        self.sb_adj_b.setValue(0)
-        self.sb_adj_l.setValue(0)
-        self.sb_adj_r.setValue(0)
-        
-        # 触发一次统一画面更新
-        self.on_value_changed()
+            sx.setValue(x); sy.setValue(y)
+        self.sb_adj_f.setValue(0); self.sb_adj_b.setValue(0); self.sb_adj_l.setValue(0); self.sb_adj_r.setValue(0)
 
     def render_points(self):
         for i in reversed(range(self.points_layout.count())): 
-            widget = self.points_layout.itemAt(i).widget()
-            if widget is not None:
-                widget.setParent(None)
-                
+            w = self.points_layout.itemAt(i).widget()
+            if w: w.setParent(None)
         self.spin_pairs.clear()
         
         for i, pt in enumerate(self.points):
             lbl_p = QLabel(f"P{i+1}:")
-            lbl_p.setStyleSheet("color: #D32F2F; font-weight: bold;")
+            lbl_p.setStyleSheet("color: #D32F2F; font-weight: bold; font-size: 15px;")
             
-            sb_x = QDoubleSpinBox()
-            sb_x.setRange(-50.0, 50.0)
-            sb_x.setDecimals(2)
-            sb_x.setSingleStep(0.05)
-            sb_x.setValue(pt['x'])
+            sx = QDoubleSpinBox(); sx.setRange(-50.0, 50.0); sx.setDecimals(2); sx.setSingleStep(0.05)
+            sx.setValue(pt['x'])
+            sy = QDoubleSpinBox(); sy.setRange(-50.0, 50.0); sy.setDecimals(2); sy.setSingleStep(0.05)
+            sy.setValue(pt['y'])
             
-            sb_y = QDoubleSpinBox()
-            sb_y.setRange(-50.0, 50.0)
-            sb_y.setDecimals(2)
-            sb_y.setSingleStep(0.05)
-            sb_y.setValue(pt['y'])
+            del_btn = QPushButton("X")
+            del_btn.setFixedSize(30, 30)
+            del_btn.setStyleSheet("background-color: #E53935; color: white; font-weight: bold; border-radius: 15px;")
+            del_btn.clicked.connect(lambda chk, idx=i: self.remove_point(idx))
             
-            del_btn = QPushButton("删除")
-            del_btn.setStyleSheet("color: white; background-color: #f44336; border-radius: 4px; padding: 2px 6px;")
-            del_btn.clicked.connect(lambda checked, idx=i: self.remove_point(idx))
-            
-            sb_x.valueChanged.connect(self.on_value_changed)
-            sb_y.valueChanged.connect(self.on_value_changed)
+            sx.valueChanged.connect(self.on_value_changed)
+            sy.valueChanged.connect(self.on_value_changed)
             
             self.points_layout.addWidget(lbl_p, i, 0)
             self.points_layout.addWidget(QLabel("X:"), i, 1)
-            self.points_layout.addWidget(sb_x, i, 2)
+            self.points_layout.addWidget(sx, i, 2)
             self.points_layout.addWidget(QLabel("Y:"), i, 3)
-            self.points_layout.addWidget(sb_y, i, 4)
+            self.points_layout.addWidget(sy, i, 4)
             self.points_layout.addWidget(del_btn, i, 5)
             
-            self.spin_pairs.append((sb_x, sb_y))
+            self.spin_pairs.append((sx, sy))
             
         self.update_output()
 
     def add_point(self):
-        if self.points:
-            last_pt = self.points[-1]
-            self.points.append({'x': last_pt['x'], 'y': last_pt['y']})
-        else:
-            self.points.append({'x': 0.0, 'y': 0.0})
+        new_pt = self.points[-1].copy() if self.points else {'x': 0.0, 'y': 0.0}
+        self.points.append(new_pt)
         self.render_points()
 
     def remove_point(self, idx):
-        if 0 <= idx < len(self.points):
+        if len(self.points) > 1:
             self.points.pop(idx)
             self.render_points()
+        else:
+            QMessageBox.warning(self, "警告", "至少需要保留一个点！")
 
     def on_value_changed(self):
         for i, (sx, sy) in enumerate(self.spin_pairs):
@@ -334,394 +402,206 @@ class SafePolygonEditor(QWidget):
         
     def update_output(self):
         self.preview.set_points(self.points)
-        self.yaml_data_source[self.raw_key] = self.points
-        b = StringIO()
-        YAML().dump(self.points, b)
-        self.hidden_text_edit.blockSignals(True)
+        flow_pts = []
+        for p in self.points:
+            flow_pts.append(create_flow_point(p['x'], p['y']))
+            
+        self.yaml_data_source[self.raw_key] = flow_pts
+        b = StringIO(); YAML().dump(flow_pts, b)
         self.hidden_text_edit.setPlainText(b.getvalue())
-        self.hidden_text_edit.blockSignals(False)
 
+# =====================================================================
+# 主界面
+# =====================================================================
 class ConfigEditorGUI(QWidget):
     def __init__(self):
         super().__init__()
-        
         self.yaml_path = '/home/getq/work/workspace/config/perception/vehicle_size.yaml'
         self.safe_yaml_path = '/home/getq/work/workspace/config/perception/safe_obstacle.yaml'
         self.cfg_path = '/home/getq/work/autoware.ai/install/lidar_filtering/share/lidar_filtering/cfg/LidarFiltering.cfg'
         
-        self.yaml_parser = YAML()
-        self.yaml_parser.preserve_quotes = True
-        
-        self.yaml_data = None
-        self.safe_yaml_data = None
-        self.cfg_lines = []
-        self.cfg_params_meta = {}
+        self.yaml_parser = YAML(); self.yaml_parser.preserve_quotes = True
+        self.yaml_data = None; self.safe_yaml_data = None
+        self.previews_basic = []; self.previews_safe = []
 
-        self.yaml_widgets = {}
-        self.safe_widgets = {}
-        self.cfg_widgets = {}
+        if HAS_ROS:
+            try:
+                rospy.init_node('config_editor_node', anonymous=True, disable_signals=True)
+                self.ros_listener = ROSListener()
+                self.ros_listener.cloud_updated.connect(self.dispatch_cloud)
+            except Exception as e:
+                print("ROS 节点启动失败:", e)
 
         self.init_ui()
 
+    def dispatch_cloud(self, points):
+        for p in self.previews_basic + self.previews_safe:
+            try: p.set_cloud_points(points)
+            except: pass
+
     def init_ui(self):
-        self.setWindowTitle("Lidar Filtering 参数配置工具")
-        self.resize(900, 950)
-        main_layout = QVBoxLayout(self)
-        tabs = QTabWidget()
+        self.setWindowTitle("Lidar Filtering 可视化调参工具")
+        self.resize(1000, 950)
+        self.setStyleSheet(GLOBAL_STYLE)
         
-        self.tab_yaml = QWidget()
-        self.setup_yaml_tab()
-        tabs.addTab(self.tab_yaml, "常规车辆参数")
+        layout = QVBoxLayout(self)
+        self.tabs = QTabWidget()
+        
+        self.tab_yaml = QWidget(); self.setup_yaml_tab(); self.tabs.addTab(self.tab_yaml, "常规车辆参数")
+        self.tab_safe = QWidget(); self.setup_safe_tab(); self.tabs.addTab(self.tab_safe, "安全检测框设置")
+        self.tab_cfg  = QWidget(); self.setup_cfg_tab();  self.tabs.addTab(self.tab_cfg,  "高级动态配置")
+        
+        layout.addWidget(self.tabs)
 
-        self.tab_safe = QWidget()
-        self.setup_safe_tab()
-        tabs.addTab(self.tab_safe, "安全检测框设置")
-
-        self.tab_cfg = QWidget()
-        self.setup_cfg_tab()
-        tabs.addTab(self.tab_cfg, "高级动态配置")
-
-        main_layout.addWidget(tabs)
-
-    def build_yaml_ui(self, layout, widgets_dict, allowed_dict, yaml_data_source, color_tuple=(0, 255, 255), ref_polygon=None):
-        for raw_key, custom_label in allowed_dict.items():
-            if raw_key not in yaml_data_source: continue
-
-            value = yaml_data_source[raw_key]
-
-            if isinstance(value, list) and len(value) > 0 and isinstance(value[0], dict):
-                group_box = QGroupBox(f"{custom_label}")
-                group_box.setStyleSheet("QGroupBox { font-weight: bold; border: 1px solid silver; border-radius: 6px; margin-top: 10px; }")
-                box_layout = QVBoxLayout(group_box)
-                h_layout = QHBoxLayout()
-
-                if raw_key == "rect":
-                    form_widget = QWidget()
-                    form_layout = QFormLayout(form_widget)
-
-                    def make_spin(gui_key, default_val):
-                        sb = QDoubleSpinBox()
-                        sb.setRange(-20.0, 30.0)
-                        sb.setDecimals(2)
-                        sb.setSingleStep(0.05)
-                        sb.setValue(yaml_data_source.get(gui_key, default_val))
-                        return sb
-
-                    sb_vf = make_spin('_gui_velo_front', 0.50)
-                    sb_tl = make_spin('_gui_total_len', 2.16)
-                    sb_hl = make_spin('_gui_head_len', 0.50)
-                    sb_hw = make_spin('_gui_head_w', 0.92)
-                    sb_bw = make_spin('_gui_body_w', 1.50)
-                    sb_margin = make_spin('_gui_margin', 0.05)
-
-                    form_layout.addRow("Velodyne距车头最前距(m):", sb_vf)
-                    form_layout.addRow("车辆总长度(m):", sb_tl)
-                    form_layout.addRow("车头区长度(m):", sb_hl)
-                    form_layout.addRow("车头区宽度(m):", sb_hw)
-                    form_layout.addRow("车身主体宽度(m):", sb_bw)
-                    form_layout.addRow("额外安全外扩余量(m):", sb_margin)
-                    
-                    h_layout.addWidget(form_widget, stretch=1)
-
-                    text_editor = QTextEdit()
-                    text_editor.hide()
-                    widgets_dict[raw_key] = text_editor
-
-                    preview = VehiclePreviewWidget(color_tuple[0], color_tuple[1], color_tuple[2])
-                    h_layout.addWidget(preview, stretch=1)
-
-                    def update_rect():
-                        vf, tl, hl, hw, bw, m = sb_vf.value(), sb_tl.value(), sb_hl.value(), sb_hw.value(), sb_bw.value(), sb_margin.value()
-                        yaml_data_source['_gui_velo_front'] = vf
-                        yaml_data_source['_gui_total_len'] = tl
-                        yaml_data_source['_gui_head_len'] = hl
-                        yaml_data_source['_gui_head_w'] = hw
-                        yaml_data_source['_gui_body_w'] = bw
-                        yaml_data_source['_gui_margin'] = m
-                        
-                        f_x, b_x = vf + m, vf - tl - m
-                        hx_min = vf - hl
-                        hw_half, bw_half = hw/2.0 + m, bw/2.0 + m
-                        pts = [
-                            {'x': round(f_x, 2), 'y': round(-hw_half, 2)},
-                            {'x': round(hx_min, 2), 'y': round(-hw_half, 2)},
-                            {'x': round(hx_min, 2), 'y': round(-bw_half, 2)},
-                            {'x': round(b_x, 2), 'y': round(-bw_half, 2)},
-                            {'x': round(b_x, 2), 'y': round(bw_half, 2)},
-                            {'x': round(hx_min, 2), 'y': round(bw_half, 2)},
-                            {'x': round(hx_min, 2), 'y': round(hw_half, 2)},
-                            {'x': round(f_x, 2), 'y': round(hw_half, 2)},
-                        ]
-                        yaml_data_source[raw_key] = pts
-                        preview.set_points(pts)
-
-                        b = StringIO()
-                        YAML().dump(pts, b)
-                        text_editor.blockSignals(True)
-                        text_editor.setPlainText(b.getvalue())
-                        text_editor.blockSignals(False)
-
-                    for sb in [sb_vf, sb_tl, sb_hl, sb_hw, sb_bw, sb_margin]:
-                        sb.valueChanged.connect(update_rect)
-                    update_rect()
-
-                else:
-                    text_editor = QTextEdit()
-                    text_editor.hide()
-                    widgets_dict[raw_key] = text_editor
-
-                    preview = VehiclePreviewWidget(color_tuple[0], color_tuple[1], color_tuple[2])
-                    if ref_polygon:
-                        preview.set_reference_points(ref_polygon)
-
-                    editor_widget = SafePolygonEditor(value, raw_key, yaml_data_source, text_editor, preview)
-                    h_layout.addWidget(editor_widget, stretch=1)
-                    h_layout.addWidget(preview, stretch=1)
-
-                box_layout.addLayout(h_layout)
-                layout.addRow(group_box)
-                continue
-
-            lbl = QLabel(custom_label + " :")
-            lbl.setWordWrap(True)
-            lbl.setStyleSheet("font-weight: bold; margin-top: 5px;")
-
-            if isinstance(value, bool):
-                w = QCheckBox()
-                w.setChecked(value)
-                widgets_dict[raw_key] = w
-                layout.addRow(lbl, w)
-            elif isinstance(value, int) and not isinstance(value, bool):
-                w = QSpinBox()
-                w.setRange(-10000, 10000)
-                w.setValue(value)
-                widgets_dict[raw_key] = w
-                layout.addRow(lbl, w)
-            elif isinstance(value, float):
-                w = QDoubleSpinBox()
-                w.setRange(-10000.0, 10000.0)
-                w.setDecimals(2)
-                w.setSingleStep(0.1)
-                w.setValue(value)
-                widgets_dict[raw_key] = w
-                layout.addRow(lbl, w)
-            elif isinstance(value, str):
-                w = QLineEdit()
-                w.setText(value)
-                widgets_dict[raw_key] = w
-                layout.addRow(lbl, w)
-
-    def save_generic_yaml(self, widgets_dict, data_source, path, allowed_dict):
-        for raw_key, w in widgets_dict.items():
-            if isinstance(w, QCheckBox):
-                data_source[raw_key] = w.isChecked()
-            elif isinstance(w, QSpinBox) or isinstance(w, QDoubleSpinBox):
-                data_source[raw_key] = w.value()
-            elif isinstance(w, QLineEdit):
-                data_source[raw_key] = w.text()
+    def save_generic_yaml(self, widgets_dict, data_source, path):
+        for k, w in widgets_dict.items():
+            if isinstance(w, QCheckBox): data_source[k] = w.isChecked()
+            elif isinstance(w, QDoubleSpinBox): data_source[k] = w.value()
             elif isinstance(w, QTextEdit):
-                text = w.toPlainText()
-                tmp_yaml = YAML()
-                try:
-                    parsed_val = tmp_yaml.load(text)
-                    data_source[raw_key] = parsed_val
-                except Exception as e:
-                    QMessageBox.warning(self, "解析错误", f"键 '{allowed_dict.get(raw_key, raw_key)}' 格式错误:\n{e}")
-                    return False
-        try:
-            with open(path, 'w', encoding='utf-8') as f:
-                self.yaml_parser.dump(data_source, f)
-            return True
-        except Exception as e:
-            QMessageBox.critical(self, "错误", f"保存失败:\n{e}")
-            return False
+                try: data_source[k] = YAML().load(w.toPlainText())
+                except: return False
+        with open(path, 'w', encoding='utf-8') as f: self.yaml_parser.dump(data_source, f)
+        return True
 
     def setup_yaml_tab(self):
-        layout = QVBoxLayout(self.tab_yaml)
-        top_layout = QHBoxLayout()
-        btn_load = QPushButton("重新读取配置")
-        btn_load.clicked.connect(self.load_yaml)
-        btn_save = QPushButton("保存基本修改")
-        btn_save.setStyleSheet("background-color: #4CAF50; color: white; font-weight: bold; padding: 5px;")
-        btn_save.clicked.connect(self.save_yaml)
-        top_layout.addWidget(btn_load)
-        top_layout.addWidget(btn_save)
-        layout.addLayout(top_layout)
-
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll_widget = QWidget()
-        self.yaml_form_layout = QFormLayout(scroll_widget)
-        scroll.setWidget(scroll_widget)
-        layout.addWidget(scroll)
-
+        l = QVBoxLayout(self.tab_yaml)
+        h = QHBoxLayout(); br = QPushButton("🔄 重新读取"); br.clicked.connect(self.load_yaml)
+        br.setStyleSheet("background-color: #757575; color: white;")
+        bs = QPushButton("💾 保存修改"); bs.clicked.connect(self.save_yaml)
+        bs.setStyleSheet("background-color: #4CAF50; color: white;")
+        h.addWidget(br); h.addWidget(bs); l.addLayout(h)
+        self.scroll_y = QScrollArea(); self.scroll_y.setWidgetResizable(True)
+        self.yaml_form_widget = QWidget(); self.yaml_form_layout = QFormLayout(self.yaml_form_widget)
+        self.scroll_y.setWidget(self.yaml_form_widget); l.addWidget(self.scroll_y)
         self.load_yaml()
 
     def load_yaml(self):
         if not os.path.exists(self.yaml_path): return
-        with open(self.yaml_path, 'r', encoding='utf-8') as f:
-            self.yaml_data = self.yaml_parser.load(f)
-
-        for i in reversed(range(self.yaml_form_layout.count())): 
-            self.yaml_form_layout.itemAt(i).widget().setParent(None)
-        self.yaml_widgets.clear()
+        with open(self.yaml_path, 'r', encoding='utf-8') as f: self.yaml_data = self.yaml_parser.load(f)
+        for i in reversed(range(self.yaml_form_layout.count())):
+            w = self.yaml_form_layout.itemAt(i).widget()
+            if w: w.setParent(None)
+        self.previews_basic = []; self.yaml_widgets = {}
         
-        self.build_yaml_ui(self.yaml_form_layout, self.yaml_widgets, ALLOWED_YAML_PARAMS, self.yaml_data, color_tuple=(0, 255, 255))
+        for k, lbl in ALLOWED_YAML_PARAMS.items():
+            if k not in self.yaml_data: continue
+            val = self.yaml_data[k]
+            
+            if k == "rect":
+                # ============== 车辆本体，统一替换为点位编辑器 ==============
+                box = QGroupBox(lbl)
+                bl = QHBoxLayout(box)
+                te = QTextEdit(); te.hide(); self.yaml_widgets[k] = te
+                
+                pv = VehiclePreviewWidget(0, 255, 255)
+                pv._tag = 'yaml'
+                self.previews_basic.append(pv)
+                
+                ed = PolygonEditor(val, k, self.yaml_data, te, pv)
+                bl.addWidget(ed, stretch=1)
+                bl.addWidget(pv, stretch=1)
+                self.yaml_form_layout.addRow(box)
+            else:
+                label = QLabel(lbl); label.setStyleSheet("font-weight: bold; margin-top: 5px;")
+                if isinstance(val, bool): w = QCheckBox(); w.setChecked(val)
+                else: w = QDoubleSpinBox(); w.setRange(-1000, 1000); w.setDecimals(2); w.setValue(val)
+                self.yaml_widgets[k] = w; self.yaml_form_layout.addRow(label, w)
 
     def save_yaml(self):
-        if self.yaml_data is None: return
-        if self.save_generic_yaml(self.yaml_widgets, self.yaml_data, self.yaml_path, ALLOWED_YAML_PARAMS):
-            QMessageBox.information(self, "提示", "填写成功,请重启系统。")
+        if self.save_generic_yaml(self.yaml_widgets, self.yaml_data, self.yaml_path):
+            QMessageBox.information(self, "提示", "常规车辆参数填写成功,请重启系统。")
 
     def setup_safe_tab(self):
-        layout = QVBoxLayout(self.tab_safe)
-        top_layout = QHBoxLayout()
-        btn_load = QPushButton("重新读取配置")
-        btn_load.clicked.connect(self.load_safe_yaml)
-        btn_save = QPushButton("保存安全框修改")
-        btn_save.setStyleSheet("background-color: #FF9800; color: white; font-weight: bold; padding: 5px;")
-        btn_save.clicked.connect(self.save_safe_yaml)
-        top_layout.addWidget(btn_load)
-        top_layout.addWidget(btn_save)
-        layout.addLayout(top_layout)
-
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll_widget = QWidget()
-        self.safe_form_layout = QFormLayout(scroll_widget)
-        scroll.setWidget(scroll_widget)
-        layout.addWidget(scroll)
-
+        l = QVBoxLayout(self.tab_safe)
+        h = QHBoxLayout(); br = QPushButton("🔄 重新读取"); br.clicked.connect(self.load_safe_yaml)
+        br.setStyleSheet("background-color: #757575; color: white;")
+        bs = QPushButton("💾 保存安全框修改"); bs.clicked.connect(self.save_safe_yaml); bs.setStyleSheet("background-color: #FF9800; color: white;")
+        h.addWidget(br); h.addWidget(bs); l.addLayout(h)
+        self.scroll_s = QScrollArea(); self.scroll_s.setWidgetResizable(True)
+        self.safe_form_widget = QWidget(); self.safe_form_layout = QFormLayout(self.safe_form_widget)
+        self.scroll_s.setWidget(self.safe_form_widget); l.addWidget(self.scroll_s)
         self.load_safe_yaml()
 
     def load_safe_yaml(self):
         if not os.path.exists(self.safe_yaml_path): return
-        with open(self.safe_yaml_path, 'r', encoding='utf-8') as f:
-            self.safe_yaml_data = self.yaml_parser.load(f)
-
-        for i in reversed(range(self.safe_form_layout.count())): 
-            self.safe_form_layout.itemAt(i).widget().setParent(None)
-        self.safe_widgets.clear()
-
-        ref_rect = self.yaml_data.get('rect', []) if self.yaml_data else []
-        self.build_yaml_ui(self.safe_form_layout, self.safe_widgets, ALLOWED_SAFE_YAML_PARAMS, self.safe_yaml_data, color_tuple=(255, 150, 0), ref_polygon=ref_rect)
+        with open(self.safe_yaml_path, 'r', encoding='utf-8') as f: self.safe_yaml_data = self.yaml_parser.load(f)
+        for i in reversed(range(self.safe_form_layout.count())):
+            w = self.safe_form_layout.itemAt(i).widget()
+            if w: w.setParent(None)
+        self.previews_safe = []; self.safe_widgets = {}
+        
+        # 提取车辆本体作为参考
+        ref = self.yaml_data.get('rect', []) if self.yaml_data else []
+        
+        for k, lbl in ALLOWED_SAFE_YAML_PARAMS.items():
+            if k not in self.safe_yaml_data: continue
+            val = self.safe_yaml_data[k]
+            if isinstance(val, list):
+                box = QGroupBox(lbl)
+                bl = QHBoxLayout(box); t = QTextEdit(); t.hide(); self.safe_widgets[k] = t
+                pv = VehiclePreviewWidget(255, 150, 0); pv.set_reference_points(ref); pv._tag = 'safe'
+                self.previews_safe.append(pv)
+                ed = PolygonEditor(val, k, self.safe_yaml_data, t, pv)
+                bl.addWidget(ed, stretch=1); bl.addWidget(pv, stretch=1)
+                self.safe_form_layout.addRow(box)
+            else:
+                label = QLabel(lbl); label.setStyleSheet("font-weight: bold; margin-top: 5px;")
+                w = QDoubleSpinBox(); w.setRange(-100, 100); w.setDecimals(2); w.setValue(val)
+                self.safe_widgets[k] = w; self.safe_form_layout.addRow(label, w)
 
     def save_safe_yaml(self):
-        if self.safe_yaml_data is None: return
-        if self.save_generic_yaml(self.safe_widgets, self.safe_yaml_data, self.safe_yaml_path, ALLOWED_SAFE_YAML_PARAMS):
-            QMessageBox.information(self, "提示", "填写成功,请重启系统。")
+        if self.save_generic_yaml(self.safe_widgets, self.safe_yaml_data, self.safe_yaml_path):
+            QMessageBox.information(self, "提示", "安全检测框填写成功,请重启系统。")
 
     def setup_cfg_tab(self):
-        layout = QVBoxLayout(self.tab_cfg)
-        top_layout = QHBoxLayout()
-        btn_load = QPushButton("重新读取配置")
-        btn_load.clicked.connect(self.load_cfg)
-        btn_save = QPushButton("保存动态修改")
-        btn_save.setStyleSheet("background-color: #f44336; color: white; font-weight: bold; padding: 5px;")
-        btn_save.clicked.connect(self.save_cfg)
-        top_layout.addWidget(btn_load)
-        top_layout.addWidget(btn_save)
-        layout.addLayout(top_layout)
-
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll_widget = QWidget()
-        self.cfg_form_layout = QFormLayout(scroll_widget)
-        scroll.setWidget(scroll_widget)
-        layout.addWidget(scroll)
-
+        l = QVBoxLayout(self.tab_cfg)
+        h = QHBoxLayout(); br = QPushButton("🔄 重新读取"); br.clicked.connect(self.load_cfg)
+        br.setStyleSheet("background-color: #757575; color: white;")
+        bs = QPushButton("⚡ 保存动态修改"); bs.clicked.connect(self.save_cfg); bs.setStyleSheet("background-color: #f44336; color: white;")
+        h.addWidget(br); h.addWidget(bs); l.addLayout(h)
+        self.scroll_c = QScrollArea(); self.scroll_c.setWidgetResizable(True)
+        self.cfg_form_widget = QWidget(); self.cfg_form_layout = QFormLayout(self.cfg_form_widget)
+        self.scroll_c.setWidget(self.cfg_form_widget); l.addWidget(self.scroll_c)
         self.load_cfg()
 
     def load_cfg(self):
         if not os.path.exists(self.cfg_path): return
-        with open(self.cfg_path, 'r', encoding='utf-8') as f:
-            self.cfg_lines = f.readlines()
-
-        self.cfg_params_meta.clear()
-        for i in reversed(range(self.cfg_form_layout.count())): 
-            self.cfg_form_layout.itemAt(i).widget().setParent(None)
-        self.cfg_widgets.clear()
-
+        with open(self.cfg_path, 'r', encoding='utf-8') as f: self.cfg_lines = f.readlines()
+        for i in reversed(range(self.cfg_form_layout.count())):
+            w = self.cfg_form_layout.itemAt(i).widget()
+            if w: w.setParent(None)
+        self.cfg_widgets = {}; self.cfg_meta = {}
         for idx, line in enumerate(self.cfg_lines):
-            line_strip = line.strip()
-            if line_strip.startswith("#") or "gen.add" not in line_strip:
-                continue
-
-            start_idx = line.find('(') + 1
-            end_idx = line.rfind(')')
-            if start_idx <= 0 or end_idx <= 0: continue
-            
-            inner = line[start_idx:end_idx]
-            parts = re.split(r',\s*(?=(?:[^"]*"[^"]*")*[^"]*$)', inner)
-            parts = [p.strip() for p in parts]
-
-            if len(parts) >= 5:
-                p_name = parts[0].strip('"\'')
-                self.cfg_params_meta[p_name] = {
-                    'line_idx': idx, 
-                    'type': parts[1], 
-                    'parts': parts, 
-                    'prefix': line[:start_idx],
-                    'default': parts[4],
-                    'min': parts[5] if len(parts) > 5 else None,
-                    'max': parts[6] if len(parts) > 6 else None
-                }
-
-        for raw_name, custom_label in ALLOWED_CFG_PARAMS.items():
-            if raw_name not in self.cfg_params_meta: continue
-
-            meta = self.cfg_params_meta[raw_name]
-            p_type, p_default, p_min, p_max = meta['type'], meta['default'], meta['min'], meta['max']
-
-            w = None
-            if p_type == 'bool_t':
-                w = QCheckBox()
-                w.setChecked(p_default == "True")
-            elif p_type == 'int_t':
-                w = QSpinBox()
-                if p_min: w.setMinimum(int(float(p_min)))
-                if p_max: w.setMaximum(int(float(p_max)))
-                w.setValue(int(float(p_default)))
-            elif p_type == 'double_t':
-                w = QDoubleSpinBox()
-                w.setDecimals(2)
-                w.setSingleStep(0.1)
-                if p_min: w.setMinimum(float(p_min))
-                if p_max: w.setMaximum(float(p_max))
-                w.setValue(float(p_default))
-
-            if w is not None:
-                self.cfg_widgets[raw_name] = w
-                lbl = QLabel(custom_label + " :")
-                lbl.setWordWrap(True)
-                lbl.setStyleSheet("font-weight: bold; margin-top: 5px;")
-                self.cfg_form_layout.addRow(lbl, w)
+            if "gen.add" not in line or line.strip().startswith("#"): continue
+            s = line.find('(')+1; e = line.rfind(')')
+            p = [x.strip() for x in re.split(r',\s*(?=(?:[^"]*"[^"]*")*[^"]*$)', line[s:e])]
+            if len(p) >= 5:
+                name = p[0].strip('"\'')
+                self.cfg_meta[name] = {'idx':idx, 'type':p[1], 'parts':p, 'prefix':line[:s]}
+        for k, lbl in ALLOWED_CFG_PARAMS.items():
+            if k not in self.cfg_meta: continue
+            m = self.cfg_meta[k]; pt, dv = m['type'], m['parts'][4]
+            label = QLabel(lbl); label.setStyleSheet("font-weight: bold; margin-top: 5px;")
+            if pt == 'bool_t': w = QCheckBox(); w.setChecked(dv == "True")
+            else:
+                w = QDoubleSpinBox(); w.setDecimals(2); w.setValue(float(dv))
+                w.setRange(float(m['parts'][5]) if len(m['parts'])>5 else -100, float(m['parts'][6]) if len(m['parts'])>6 else 100)
+            self.cfg_widgets[k] = w; self.cfg_form_layout.addRow(label, w)
 
     def save_cfg(self):
-        if not self.cfg_lines: return
-
-        for raw_name, w in self.cfg_widgets.items():
-            meta = self.cfg_params_meta[raw_name]
-            idx, parts = meta['line_idx'], meta['parts'].copy()
-
-            if meta['type'] == 'bool_t': new_val_str = "True" if w.isChecked() else "False"
-            else: new_val_str = str(w.value())
-
-            parts[4] = new_val_str
-            new_inner = ", ".join(parts)
-            new_line = f"{meta['prefix']}{new_inner})\n"
-            self.cfg_lines[idx] = new_line
-
-        try:
-            with open(self.cfg_path, 'w', encoding='utf-8') as f:
-                f.writelines(self.cfg_lines)
-            QMessageBox.information(self, "提示", "填写成功,请重启系统。")
-        except Exception as e:
-            QMessageBox.critical(self, "错误", f"保存 CFG 失败:\n{e}")
+        for k, w in self.cfg_widgets.items():
+            m = self.cfg_meta[k]; p = m['parts'].copy()
+            p[4] = "True" if (isinstance(w, QCheckBox) and w.isChecked()) else ("False" if isinstance(w, QCheckBox) else str(round(w.value(), 2)))
+            self.cfg_lines[m['idx']] = f"{m['prefix']}{', '.join(p)})\n"
+        with open(self.cfg_path, 'w', encoding='utf-8') as f: f.writelines(self.cfg_lines)
+        QMessageBox.information(self, "提示", "动态配置修改成功,请重启系统。")
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)
-    app.setStyle("Fusion")
     gui = ConfigEditorGUI()
     gui.show()
+    
+    if HAS_ROS:
+        app.aboutToQuit.connect(rospy.signal_shutdown)
+        
     sys.exit(app.exec_())
