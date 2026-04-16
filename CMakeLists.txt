@@ -84,3 +84,8 @@ install(TARGETS lidar_filter_core multi_points
 install(DIRECTORY launch params cfg
   DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}
 )
+
+catkin_install_python(PROGRAMS
+  scripts/config_editor_gui.py
+  DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
+)

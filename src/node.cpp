@@ -260,6 +260,87 @@ void processCloud(const sensor_msgs::PointCloud2::ConstPtr &cloud_msg, Calibrati
     }
 }
 
+// ================== 单线雷达专用：综合噪点过滤器 ==================
+struct SingleLineNoiseFilter {
+    std::map<int, int> history_hits;
+    int FRAME_THRESHOLD = 3;           // 必须连续出现 3 帧
+    float DIST_THRESHOLD = 1.6f;       // 仅针对 0.6 米内数据
+    float INTENSITY_THRESHOLD = 5.0f; // 强度阈值，针对灯光噪点(依硬件微调)
+
+    // 类成员缓存
+    pcl::PointCloud<pcl::PointXYZI>::Ptr near_cloud;
+    pcl::PointCloud<pcl::PointXYZI>::Ptr far_cloud;
+    pcl::PointCloud<pcl::PointXYZI>::Ptr ror_cleaned;
+    pcl::PointCloud<pcl::PointXYZI>::Ptr final_near_cloud;
+    pcl::RadiusOutlierRemoval<pcl::PointXYZI> ror_filter;
+
+    SingleLineNoiseFilter() {
+        near_cloud.reset(new pcl::PointCloud<pcl::PointXYZI>());
+        far_cloud.reset(new pcl::PointCloud<pcl::PointXYZI>());
+        ror_cleaned.reset(new pcl::PointCloud<pcl::PointXYZI>());
+        final_near_cloud.reset(new pcl::PointCloud<pcl::PointXYZI>());
+        
+        ror_filter.setRadiusSearch(0.15);
+        ror_filter.setMinNeighborsInRadius(2); 
+    }
+
+    void process(pcl::PointCloud<pcl::PointXYZI>::Ptr& cloud) {
+        if (cloud->empty()) return;
+
+        // 每次调用清空复用的容器
+        near_cloud->clear();
+        far_cloud->clear();
+        ror_cleaned->clear();
+        final_near_cloud->clear();
+
+        // 1. 距离分段 + 强度预筛
+        for (const auto& pt : *cloud) {
+            float dist = std::sqrt(pt.x * pt.x + pt.y * pt.y);
+            if (dist < DIST_THRESHOLD) {
+                // 【强度过滤】路灯/阳光噪点强度极低，直接丢弃
+                if (pt.intensity < INTENSITY_THRESHOLD) continue; 
+                near_cloud->push_back(pt);
+            } else {
+                far_cloud->push_back(pt);
+            }
+        }
+
+        // 如果近处没点，清空历史并直接替换数据(极速模式)
+        if (near_cloud->empty()) {
+            history_hits.clear();
+            cloud->swap(*far_cloud); 
+            return;
+        }
+
+        // 2. 空间滤波：半径孤立点去除 (ROR)
+        ror_filter.setInputCloud(near_cloud);
+        ror_filter.filter(*ror_cleaned);
+
+        // 3. 时间滤波：多帧确认机制
+        std::map<int, int> current_hits;
+        for (const auto& pt : *ror_cleaned) {
+            float angle = std::atan2(pt.y, pt.x) * 180.0 / M_PI;
+            // 降低角度分辨率到 1度 (angle * 1.0)，增加运动容错率
+            // 如果小车晃动很大，可以改为 angle * 0.5 (2度一个栅格）
+            int angle_idx = static_cast<int>(angle * 0.025); // 40度一个栅格
+
+            current_hits[angle_idx] = history_hits[angle_idx] + 1;
+
+            if (current_hits[angle_idx] >= FRAME_THRESHOLD) {
+                final_near_cloud->push_back(pt);
+            }
+        }
+        history_hits = current_hits; // 滑动覆盖历史记录
+
+        // 4. 组装输出
+        cloud->clear();
+        cloud->reserve(final_near_cloud->size() + far_cloud->size());
+        *cloud += *final_near_cloud;
+        *cloud += *far_cloud;
+    }
+};
+// =================================================================
+
 void callback(const sensor_msgs::PointCloud2::ConstPtr &msg_16, const sensor_msgs::PointCloud2::ConstPtr &msg_mid, const sensor_msgs::LaserScan::ConstPtr &msg_left, const sensor_msgs::LaserScan::ConstPtr &msg_right) {
     auto start_time = std::chrono::high_resolution_clock::now();
     bool check_speed = (can_info_.speed < maxSpeed);
@@ -298,6 +379,14 @@ void callback(const sensor_msgs::PointCloud2::ConstPtr &msg_16, const sensor_msg
         pub_points_raw.publish(raw_msg);
     }
 
+    // 实例化两个静态对象，保证生命周期贯穿整个程序，且左右雷达的历史状态互不干扰
+    static SingleLineNoiseFilter left_noise_filter;
+    static SingleLineNoiseFilter right_noise_filter;
+
+    // 独立执行 强度 + 半径 + 多帧确认 过滤
+    left_noise_filter.process(buf_left.filt);
+    right_noise_filter.process(buf_right.filt);
+
     // 【消灭内存碎片】局部点云合并缓冲区改为 static
     static pcl::PointCloud<pcl::PointXYZI>::Ptr merged_cloud(new pcl::PointCloud<pcl::PointXYZI>());
     static pcl::PointCloud<pcl::PointXYZI>::Ptr final_output(new pcl::PointCloud<pcl::PointXYZI>());
@@ -306,41 +395,6 @@ void callback(const sensor_msgs::PointCloud2::ConstPtr &msg_16, const sensor_msg
     final_output->clear();
 
     size_t total_filt = buf_main.filt->size() + buf_mid.filt->size() + buf_left.filt->size() + buf_right.filt->size();
-    
-    //单线过滤，开启的话，直接复制粘贴放入这里即可。
-    // ================== 单线阳光点过滤 ==================
-    // 阳光引起的噪点通常是孤立的。使用半径滤波剔除这些孤立点。
-    static pcl::RadiusOutlierRemoval<pcl::PointXYZI> ror_filter;
-    
-    // 【参数调节建议】
-    // setRadiusSearch: 搜索半径。考虑到单线雷达远处的点距会变大，建议设为 0.2 ~ 0.4 米。
-    // setMinNeighborsInRadius: 邻居数阈值。设为 2 表示：如果一个点半径0.3米内少于2个点，则被当做阳光噪点删掉。
-    ror_filter.setRadiusSearch(0.2);       
-    ror_filter.setMinNeighborsInRadius(2); 
-
-    if (!buf_left.filt->empty()) {
-        // 静态指针，防止每帧重复申请内存
-        static pcl::PointCloud<pcl::PointXYZI>::Ptr tmp_left_cleaned(new pcl::PointCloud<pcl::PointXYZI>());
-        tmp_left_cleaned->clear();
-        
-        ror_filter.setInputCloud(buf_left.filt);
-        ror_filter.filter(*tmp_left_cleaned);
-        
-        // 内存优化：使用 swap 高效交换数据，避免深拷贝
-        buf_left.filt->swap(*tmp_left_cleaned);
-    }
-
-    if (!buf_right.filt->empty()) {
-        // 静态指针，防止每帧重复申请内存
-        static pcl::PointCloud<pcl::PointXYZI>::Ptr tmp_right_cleaned(new pcl::PointCloud<pcl::PointXYZI>());
-        tmp_right_cleaned->clear();
-        
-        ror_filter.setInputCloud(buf_right.filt);
-        ror_filter.filter(*tmp_right_cleaned);
-        
-        buf_right.filt->swap(*tmp_right_cleaned);
-    }
-    // ====================================================
 
     if (pub_merged_filter_.getNumSubscribers() > 0) {
         merged_cloud->reserve(total_filt);
