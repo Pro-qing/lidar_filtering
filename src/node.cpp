@@ -265,7 +265,7 @@ struct SingleLineNoiseFilter {
     std::map<int, int> history_hits;
     int FRAME_THRESHOLD = 3;           // 必须连续出现 3 帧
     float DIST_THRESHOLD = 1.6f;       // 仅针对 0.6 米内数据
-    float INTENSITY_THRESHOLD = 5.0f; // 强度阈值，针对灯光噪点(依硬件微调)
+    float INTENSITY_THRESHOLD = 5.0f; // 强度阈值，针对灯光噪点
 
     // 类成员缓存
     pcl::PointCloud<pcl::PointXYZI>::Ptr near_cloud;
@@ -297,7 +297,7 @@ struct SingleLineNoiseFilter {
         for (const auto& pt : *cloud) {
             float dist = std::sqrt(pt.x * pt.x + pt.y * pt.y);
             if (dist < DIST_THRESHOLD) {
-                // 【强度过滤】路灯/阳光噪点强度极低，直接丢弃
+                // 路灯/阳光噪点强度极低，直接丢弃
                 if (pt.intensity < INTENSITY_THRESHOLD) continue; 
                 near_cloud->push_back(pt);
             } else {
@@ -321,7 +321,6 @@ struct SingleLineNoiseFilter {
         for (const auto& pt : *ror_cleaned) {
             float angle = std::atan2(pt.y, pt.x) * 180.0 / M_PI;
             // 降低角度分辨率到 1度 (angle * 1.0)，增加运动容错率
-            // 如果小车晃动很大，可以改为 angle * 0.5 (2度一个栅格）
             int angle_idx = static_cast<int>(angle * 0.025); // 40度一个栅格
 
             current_hits[angle_idx] = history_hits[angle_idx] + 1;
