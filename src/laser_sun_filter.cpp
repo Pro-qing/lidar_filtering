@@ -118,7 +118,7 @@
 // // 更新全局计数地图（只保留当前帧命中的，没命中的会自动清零，实现类似滑动窗口效果）
 // near_point_count_map = current_frame_hits;
 
-// // 5. 合并后写回
+// // 5. 合并并写回
 // buf_left.filt->clear();
 // *buf_left.filt += *final_near_cloud;
 // *buf_left.filt += *far_cloud;
