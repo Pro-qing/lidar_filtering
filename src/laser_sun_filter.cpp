@@ -63,63 +63,63 @@
 // }
 
 
-#include <map>
+// #include <map>
 
-// ================== 综合过滤逻辑 (强度 + ROR + 多帧) ==================
-// 建议在类成员中定义，或者使用 static 保持状态
-static std::map<int, int> near_point_count_map; // 用于存放每个角度（或栅格）点的出现次数
-const int FRAME_THRESHOLD = 3;  // 必须连续出现 3 帧才认可
+// // ================== 综合过滤逻辑 (强度 + ROR + 多帧) ==================
+// // 建议在类成员中定义，或者使用 static 保持状态
+// static std::map<int, int> near_point_count_map; // 用于存放每个角度（或栅格）点的出现次数
+// const int FRAME_THRESHOLD = 3;  // 必须连续出现 3 帧才认可
 
-// 1. 准备容器
-pcl::PointCloud<pcl::PointXYZI>::Ptr near_cloud(new pcl::PointCloud<pcl::PointXYZI>);
-pcl::PointCloud<pcl::PointXYZI>::Ptr far_cloud(new pcl::PointCloud<pcl::PointXYZI>);
+// // 1. 准备容器
+// pcl::PointCloud<pcl::PointXYZI>::Ptr near_cloud(new pcl::PointCloud<pcl::PointXYZI>);
+// pcl::PointCloud<pcl::PointXYZI>::Ptr far_cloud(new pcl::PointCloud<pcl::PointXYZI>);
 
-// 2. 第一步：距离分段 + 强度过滤
-for (const auto& pt : *buf_left.filt) {
-    float dist = std::sqrt(pt.x * pt.x + pt.y * pt.y);
+// // 2. 第一步：距离分段 + 强度过滤
+// for (const auto& pt : *buf_left.filt) {
+//     float dist = std::sqrt(pt.x * pt.x + pt.y * pt.y);
     
-    if (dist < 0.6f) {
-        // 【强度过滤】根据实验值调整，通常灯光噪点强度极低（如 < 10）
-        if (pt.intensity < 6) continue; 
-        near_cloud->push_back(pt);
-    } else {
-        far_cloud->push_back(pt);
-    }
-}
+//     if (dist < 0.6f) {
+//         // 【强度过滤】根据实验值调整，通常灯光噪点强度极低（如 < 10）
+//         if (pt.intensity < 6) continue; 
+//         near_cloud->push_back(pt);
+//     } else {
+//         far_cloud->push_back(pt);
+//     }
+// }
 
-// 3. 第二步：半径滤波 (仅针对近距离点)
-pcl::PointCloud<pcl::PointXYZI>::Ptr ror_cleaned_near(new pcl::PointCloud<pcl::PointXYZI>);
-if (!near_cloud->empty()) {
-    static pcl::RadiusOutlierRemoval<pcl::PointXYZI> ror_filter;
-    ror_filter.setRadiusSearch(0.1); 
-    ror_filter.setMinNeighborsInRadius(4); 
-    ror_filter.setInputCloud(near_cloud);
-    ror_filter.filter(*ror_cleaned_near);
-}
+// // 3. 第二步：半径滤波 (仅针对近距离点)
+// pcl::PointCloud<pcl::PointXYZI>::Ptr ror_cleaned_near(new pcl::PointCloud<pcl::PointXYZI>);
+// if (!near_cloud->empty()) {
+//     static pcl::RadiusOutlierRemoval<pcl::PointXYZI> ror_filter;
+//     ror_filter.setRadiusSearch(0.1); 
+//     ror_filter.setMinNeighborsInRadius(4); 
+//     ror_filter.setInputCloud(near_cloud);
+//     ror_filter.filter(*ror_cleaned_near);
+// }
 
-// 4. 第三步：多帧确认 (Temporal Filtering)
-// 针对近距离过滤后的点，判断其是否在时间轴上稳定
-pcl::PointCloud<pcl::PointXYZI>::Ptr final_near_cloud(new pcl::PointCloud<pcl::PointXYZI>);
-// 简单的角度栅格化方法：将 360 度分为 3600 个栅格（0.1度一个）
-std::map<int, int> current_frame_hits;
+// // 4. 第三步：多帧确认 (Temporal Filtering)
+// // 针对近距离过滤后的点，判断其是否在时间轴上稳定
+// pcl::PointCloud<pcl::PointXYZI>::Ptr final_near_cloud(new pcl::PointCloud<pcl::PointXYZI>);
+// // 简单的角度栅格化方法：将 360 度分为 3600 个栅格（0.1度一个）
+// std::map<int, int> current_frame_hits;
 
-for (const auto& pt : *ror_cleaned_near) {
-    // 计算角度索引作为 Key
-    float angle = std::atan2(pt.y, pt.x) * 180.0 / M_PI;
-    int angle_idx = static_cast<int>(angle * 10); // 0.1度精度
+// for (const auto& pt : *ror_cleaned_near) {
+//     // 计算角度索引作为 Key
+//     float angle = std::atan2(pt.y, pt.x) * 180.0 / M_PI;
+//     int angle_idx = static_cast<int>(angle * 10); // 0.1度精度
 
-    // 如果这个角度在上一帧也存在，计数加1
-    current_frame_hits[angle_idx] = near_point_count_map[angle_idx] + 1;
+//     // 如果这个角度在上一帧也存在，计数加1
+//     current_frame_hits[angle_idx] = near_point_count_map[angle_idx] + 1;
 
-    if (current_frame_hits[angle_idx] >= FRAME_THRESHOLD) {
-        final_near_cloud->push_back(pt);
-    }
-}
-// 更新全局计数地图（只保留当前帧命中的，没命中的会自动清零，实现类似滑动窗口效果）
-near_point_count_map = current_frame_hits;
+//     if (current_frame_hits[angle_idx] >= FRAME_THRESHOLD) {
+//         final_near_cloud->push_back(pt);
+//     }
+// }
+// // 更新全局计数地图（只保留当前帧命中的，没命中的会自动清零，实现类似滑动窗口效果）
+// near_point_count_map = current_frame_hits;
 
-// 5. 合并并写回
-buf_left.filt->clear();
-*buf_left.filt += *final_near_cloud;
-*buf_left.filt += *far_cloud;
-// ====================================================
+// // 5. 合并并写回
+// buf_left.filt->clear();
+// *buf_left.filt += *final_near_cloud;
+// *buf_left.filt += *far_cloud;
+// // ====================================================

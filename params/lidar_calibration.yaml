@@ -56,12 +56,12 @@ tf_calibration:
   main_pitch: 0.0
   main_roll: 0.0  
   # 补盲雷达
-  top_x: 0.19
-  top_y: 0.0
-  top_z: -0.23
-  top_yaw: 0.04
-  top_pitch: 0.0
-  top_roll: 3.1415
+  top_x: 0.183
+  top_y: -0.004
+  top_z: -0.36
+  top_yaw: 3.098
+  top_pitch: 2.9534
+  top_roll: -0.027
   # 左前单线
   left_x: 0.25
   left_y: 0.35

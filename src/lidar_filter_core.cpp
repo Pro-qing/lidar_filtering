@@ -62,7 +62,7 @@ LidarFilterCore::LidarFilterCore(ros::NodeHandle &nh, ros::NodeHandle &private_n
     private_nh_.param("consistency_max_angle", consistency_max_angle_, 30.0);
     private_nh_.param("consistency_diff_dist", consistency_diff_dist_, 1.2);
 
-    // 【新增】初始化 OpenMP 缓冲池
+    // 初始化 OpenMP 缓冲池
     int max_threads = omp_get_max_threads();
     omp_buffers_filter_.resize(max_threads);
     omp_buffers_vehicle_.resize(max_threads);
@@ -469,7 +469,7 @@ void LidarFilterCore::filterChargingStation(pcl::PointCloud<pcl::PointXYZI>::Ptr
     updateChargeCache(transPose_);
     size_t write_index = 0;
     
-    #pragma omp parallel for
+    // #pragma omp parallel for
     for (size_t i = 0; i < cloud_ptr->size(); ++i) {
         if (!isPointInChargeArea(cloud_ptr->points[i])) {
             cloud_ptr->points[write_index++] = cloud_ptr->points[i];
@@ -619,11 +619,52 @@ visualization_msgs::Marker LidarFilterCore::pubVehicleModel(const std::vector<ge
 }
 
 void LidarFilterCore::displayPolygonInRviz(ros::Publisher& publisher, const geometry_msgs::Pose& pose_, float scale_x, float scale_y, float scale_z) {
-    visualization_msgs::Marker m; m.header.frame_id = "map"; m.type = visualization_msgs::Marker::LINE_STRIP;
-    m.action = visualization_msgs::Marker::ADD; m.id = 0; m.scale.x = 0.05; m.color.a = 1.0; m.color.r = 1.0;
-    std::vector<geometry_msgs::Point> v = getRectangleVertices(pose_, scale_x, scale_y);
-    if(!v.empty()) { m.points = v; m.points.push_back(v[0]); }
-    visualization_msgs::MarkerArray ma; ma.markers.push_back(m); publisher.publish(ma);
+    visualization_msgs::Marker m; 
+    m.header.frame_id = "map"; 
+    m.type = visualization_msgs::Marker::LINE_LIST; // 改用 LINE_LIST 绘制 3D 独立线段
+    m.id = 0; 
+    m.scale.x = 0.05; // 线条粗细
+    m.color.a = 1.0; 
+    m.color.r = 1.0;  // 红色框
+
+    // 当未找到充电桩或者长宽为0时，删除对应的 Marker，而不是画一个没有体积的点
+    if (scale_x <= 0.001 || scale_y <= 0.001) {
+        m.action = visualization_msgs::Marker::DELETE;
+    } else {
+        m.action = visualization_msgs::Marker::ADD;
+        
+        // 获取底面的四个顶点
+        std::vector<geometry_msgs::Point> bottom_v = getRectangleVertices(pose_, scale_x, scale_y);
+        
+        if(!bottom_v.empty()) { 
+            // 通过加上高度 (scale_z) 来生成顶面的四个顶点
+            std::vector<geometry_msgs::Point> top_v = bottom_v;
+            for (auto& p : top_v) {
+                p.z += scale_z;
+            }
+
+            // 组装 3D 线框的 12 条边 (底面4条 + 顶面4条 + 侧面4条)
+            for (size_t i = 0; i < 4; ++i) {
+                size_t next = (i + 1) % 4;
+                
+                // 1. 底面的四条边
+                m.points.push_back(bottom_v[i]);
+                m.points.push_back(bottom_v[next]);
+                
+                // 2. 顶面的四条边
+                m.points.push_back(top_v[i]);
+                m.points.push_back(top_v[next]);
+                
+                // 3. 连接底面和顶面的四条垂直高度线
+                m.points.push_back(bottom_v[i]);
+                m.points.push_back(top_v[i]);
+            }
+        }
+    }
+    
+    visualization_msgs::MarkerArray ma; 
+    ma.markers.push_back(m); 
+    publisher.publish(ma);
 }
 
 bool LidarFilterCore::transformPose(const geometry_msgs::TransformStamped& transform, const geometry_msgs::Pose& input_pose, geometry_msgs::Pose& output_pose) {
@@ -641,12 +682,10 @@ void LidarFilterCore::keyPointCallback(const autoware_msgs::KeyPointArrayConstPt
     }
     fliterpose_.clear(); bool found = false;
     if(!msg->path.empty()) {
-        std::vector<int> idxs = {0, (int)msg->path.size()-1};
-        for(int i : idxs) {
-            if(i < 0 || i >= msg->path.size()) continue;
-            for (const auto& t : msg->path.at(i).types) {
-                if(t.type_name == "charges") {
-                    geometry_msgs::Pose p = msg->path.at(i).pose.pose;
+        for(const auto& point : msg->path) {
+            for (const auto& type : point.types) {
+                if(type.type_name == "charges") {
+                    geometry_msgs::Pose p = point.pose.pose;
                     if(error != 0) { 
                         p.position.x += cos(tf2::getYaw(p.orientation)) * error; 
                         p.position.y += sin(tf2::getYaw(p.orientation)) * error; 
@@ -654,12 +693,14 @@ void LidarFilterCore::keyPointCallback(const autoware_msgs::KeyPointArrayConstPt
                     fliterpose_.push_back(p); 
                     displayPolygonInRviz(marker_pub_, p, len, wide, high); 
                     found = true;
+                    ROS_INFO("Found charge point: %s", type.data.c_str());
                 }
             }
         }
     }
     if(!found) { geometry_msgs::Pose e; displayPolygonInRviz(marker_pub_, e, 0, 0, 0); }
 }
+
 
 void LidarFilterCore::ctrolCallback(const std_msgs::Int8ConstPtr &msg) {
     bool do_charge;
