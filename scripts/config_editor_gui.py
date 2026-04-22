@@ -33,9 +33,9 @@ except ImportError:
 # =====================================================================
 ALLOWED_YAML_PARAMS = {
     "crop_radius": "最大过滤范围 (米)",
-    "crop_radius_x": "X轴前后误差补偿 (米)",
-    "height_min": "最小高度过滤阈值 (米)",
-    "voxel_filter": "体素滤波下采样精度 (米)",
+    # "crop_radius_x": "X轴前后误差补偿 (米)",
+    # "height_min": "最小高度过滤阈值 (米)",
+    # "voxel_filter": "体素滤波下采样精度 (米)",
     "filter_floor": "是否开启地面过滤",
     "rect": "车辆本体轮廓", 
     "charge_enble": "是否开启充电桩过滤",
