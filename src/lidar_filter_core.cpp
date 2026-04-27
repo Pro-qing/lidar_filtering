@@ -42,37 +42,78 @@ void LidarFilterCore::updateNativeConfig(const NativeFilterConfig& config) {
     charge_enble_ = config.charge_enble;
 }
 
-void LidarFilterCore::filterScanMsg(sensor_msgs::LaserScan& scan, double min_angle_deg, double max_angle_deg, double max_dis, bool is_limit_mode, double limit_min_deg, double limit_max_deg) 
+// void LidarFilterCore::filterScanMsg(sensor_msgs::LaserScan& scan, double min_angle_deg, double max_angle_deg, double max_dis, bool is_limit_mode, double limit_min_deg, double limit_max_deg) 
+// {
+//     int size = scan.ranges.size();
+//     double angle_min = scan.angle_min;
+//     double angle_inc = scan.angle_increment;
+    
+//     #pragma omp parallel for
+//     for (int i = 0; i < size; ++i) {
+//         if (std::isinf(scan.ranges[i]) || std::isnan(scan.ranges[i])) continue;
+//         if (scan.ranges[i] > max_dis) { scan.ranges[i] = std::numeric_limits<float>::infinity(); continue; }
+
+//         double angle_rad = angle_min + i * angle_inc;
+//         double angle_deg = angle_rad * 180.0 / M_PI;
+//         while (angle_deg < 0) angle_deg += 360.0;
+//         while (angle_deg >= 360.0) angle_deg -= 360.0;
+
+//         bool should_remove = false;
+//         if (min_angle_deg > max_angle_deg) {
+//             if (angle_deg > min_angle_deg || angle_deg < max_angle_deg) should_remove = true;
+//         } else {
+//             if (angle_deg > min_angle_deg && angle_deg < max_angle_deg) should_remove = true;
+//         }
+
+//         if (!should_remove && is_limit_mode) {
+//              if (limit_min_deg > limit_max_deg) {
+//                 if (angle_deg > limit_min_deg || angle_deg < limit_max_deg) should_remove = true;
+//             } else {
+//                 if (angle_deg > limit_min_deg && angle_deg < limit_max_deg) should_remove = true;
+//             }
+//         }
+//         if (should_remove) scan.ranges[i] = std::numeric_limits<float>::infinity();
+//     }
+// }
+
+/**
+ * @brief 简化版 Scan 过滤器：只保留 [min_deg, max_deg] 范围内的点
+ * 支持跨越 0 度的扇区（例如 350度 到 10度）
+ */
+void LidarFilterCore::filterScanMsg(sensor_msgs::LaserScan& scan, double min_deg, double max_deg, double max_dis, bool is_limit_mode, double limit_min_deg, double limit_max_deg) 
 {
     int size = scan.ranges.size();
     double angle_min = scan.angle_min;
     double angle_inc = scan.angle_increment;
-    
+
     #pragma omp parallel for
     for (int i = 0; i < size; ++i) {
-        if (std::isinf(scan.ranges[i]) || std::isnan(scan.ranges[i])) continue;
-        if (scan.ranges[i] > max_dis) { scan.ranges[i] = std::numeric_limits<float>::infinity(); continue; }
+        float r = scan.ranges[i];
+        if (std::isinf(r) || std::isnan(r)) continue;
+        
+        // 1. 基础距离截断
+        if (r > max_dis || r < 0.05) { 
+            scan.ranges[i] = std::numeric_limits<float>::infinity(); 
+            continue; 
+        }
 
+        // 2. 角度扇区判定
         double angle_rad = angle_min + i * angle_inc;
         double angle_deg = angle_rad * 180.0 / M_PI;
         while (angle_deg < 0) angle_deg += 360.0;
         while (angle_deg >= 360.0) angle_deg -= 360.0;
 
-        bool should_remove = false;
-        if (min_angle_deg > max_angle_deg) {
-            if (angle_deg > min_angle_deg || angle_deg < max_angle_deg) should_remove = true;
+        bool in_sector = false;
+        if (min_deg < max_deg) {
+            in_sector = (angle_deg >= min_deg && angle_deg <= max_deg);
         } else {
-            if (angle_deg > min_angle_deg && angle_deg < max_angle_deg) should_remove = true;
+            // 处理跨 0 度情况，例如 min=350, max=10
+            in_sector = (angle_deg >= min_deg || angle_deg <= max_deg);
         }
 
-        if (!should_remove && is_limit_mode) {
-             if (limit_min_deg > limit_max_deg) {
-                if (angle_deg > limit_min_deg || angle_deg < limit_max_deg) should_remove = true;
-            } else {
-                if (angle_deg > limit_min_deg && angle_deg < limit_max_deg) should_remove = true;
-            }
+        if (!in_sector) {
+            scan.ranges[i] = std::numeric_limits<float>::infinity();
         }
-        if (should_remove) scan.ranges[i] = std::numeric_limits<float>::infinity();
     }
 }
 

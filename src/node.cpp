@@ -380,33 +380,31 @@ void publishChargingStationPolygon(const std_msgs::Header& header) {
     pub_charge_polygon_marker_.publish(markers);
 }
 
-void processScan(sensor_msgs::LaserScan scan_copy, CalibrationParams calib, FilterParams filter, bool is_limit_check, double limit_min, double limit_max, LidarBuffers& buf) {
-    buf.calib->clear(); buf.filt->clear(); buf.raw_count = scan_copy.ranges.size();
-    LidarFilterCore::filterScanMsg(scan_copy, 0, 0, 100.0, false, 0, 0);
-    sensor_msgs::PointCloud2 cloud_msg;
-    try { projector_.projectLaser(scan_copy, cloud_msg); } catch (...) {}
-    if (cloud_msg.width > 0) {
-        pcl::fromROSMsg(cloud_msg, *buf.calib);
-        pcl::transformPointCloud(*buf.calib, *buf.calib, calib.getMatrix());
-    }
-    if (filter.enable) {
-        sensor_msgs::LaserScan scan_strict = scan_copy;
-        bool limit_mode = is_limit_check && (can_info_.speed < maxSpeed) && (maxLimitDis_speed < filter.max_dis);
-        LidarFilterCore::filterScanMsgDualInterval(scan_strict, filter.a, filter.b, filter.c, filter.d, filter.max_dis, limit_mode, limit_min, limit_max, maxLimitDis_speed); 
-        sensor_msgs::PointCloud2 strict_msg;
-        
-        static pcl::PointCloud<pcl::PointXYZI>::Ptr cloud_strict(new pcl::PointCloud<pcl::PointXYZI>);
-        static pcl::PointCloud<pcl::PointXYZI>::Ptr env_cloud(new pcl::PointCloud<pcl::PointXYZI>);
-        cloud_strict->clear(); 
-        env_cloud->clear();
+// 修改后的 processScan：仅负责投影和坐标转换
+void projectScanToCloud(sensor_msgs::LaserScan& scan_in, 
+                        const CalibrationParams& calib, 
+                        const FilterParams& filter, 
+                        pcl::PointCloud<pcl::PointXYZI>::Ptr& output_cloud) 
+{
+    if (!filter.enable) return;
 
-        try { projector_.projectLaser(scan_strict, strict_msg); } catch(...){}
-        if (strict_msg.width > 0) {
-            pcl::fromROSMsg(strict_msg, *cloud_strict);
-            pcl::transformPointCloud(*cloud_strict, *cloud_strict, calib.getMatrix());
-            filter_core_ptr_->pointcloud_filter(cloud_strict, env_cloud, false); 
-            filter_core_ptr_->filterVehicleBody(env_cloud, buf.filt, vehicleSize);
-        }
+    // 1. 在 Scan 层面执行角度裁剪（对应 YAML 里的 a, b 参数）
+    filter_core_ptr_->filterScanMsg(scan_in, filter.a, filter.b, filter.max_dis, false, 0, 0);
+
+    // 2. 投影到 PointCloud
+    sensor_msgs::PointCloud2 cloud_msg;
+    try {
+        projector_.projectLaser(scan_in, cloud_msg);
+    } catch (...) {
+        return;
+    }
+
+    if (cloud_msg.width > 0) {
+        pcl::PointCloud<pcl::PointXYZI> tmp_pcl;
+        pcl::fromROSMsg(cloud_msg, tmp_pcl);
+        // 3. 变换到统一坐标系 (base_link / velodyne)
+        pcl::transformPointCloud(tmp_pcl, tmp_pcl, calib.getMatrix());
+        *output_cloud += tmp_pcl; // 合并到输出 buffer
     }
 }
 
@@ -494,11 +492,13 @@ struct SingleLineNoiseFilter {
     }
 };
 
-void callback(const sensor_msgs::PointCloud2::ConstPtr &msg_16, const sensor_msgs::PointCloud2::ConstPtr &msg_mid, const sensor_msgs::LaserScan::ConstPtr &msg_left, const sensor_msgs::LaserScan::ConstPtr &msg_right) {
+void callback(const sensor_msgs::PointCloud2::ConstPtr &msg_16, 
+              const sensor_msgs::PointCloud2::ConstPtr &msg_mid, 
+              const sensor_msgs::LaserScan::ConstPtr &msg_left, 
+              const sensor_msgs::LaserScan::ConstPtr &msg_right) 
+{
+    // 1. 记录处理开始时间
     auto start_time = std::chrono::high_resolution_clock::now();
-    bool check_speed = (can_info_.speed < maxSpeed);
-    sensor_msgs::LaserScan scan_left_copy = *msg_left;
-    sensor_msgs::LaserScan scan_right_copy = *msg_right;
 
     CalibrationParams local_p_main, local_p_mid, local_p_left, local_p_right;
     {
@@ -509,69 +509,49 @@ void callback(const sensor_msgs::PointCloud2::ConstPtr &msg_16, const sensor_msg
         local_p_right = p_right;
     }
 
-    filter_core_ptr_->checkScanConsistency(scan_left_copy, scan_right_copy, local_p_left.yaw, local_p_right.yaw);
-
+    // 2. 处理 3D 雷达
     processCloud(msg_16, local_p_main, f_main, buf_main, false);
     processCloud(msg_mid, local_p_mid, f_mid, buf_mid, true);
-    processScan(scan_left_copy, local_p_left, f_left, check_speed, leftLimit_min, leftLimit_max, buf_left);
-    processScan(scan_right_copy, local_p_right, f_right, check_speed, rightLimit_min, rightLimit_max, buf_right);
 
-    if (filter_core_ptr_->charge_enble_ && filter_core_ptr_->fliter_charge_ != 0 && !buf_mid.filt->empty()) {
-        filter_core_ptr_->filterChargingStation(buf_mid.filt);
+    // 3. 处理单线雷达 (先行合并)
+    static pcl::PointCloud<pcl::PointXYZI>::Ptr combined_2d_raw(new pcl::PointCloud<pcl::PointXYZI>());
+    combined_2d_raw->clear();
+
+    sensor_msgs::LaserScan scan_left_copy = *msg_left;
+    sensor_msgs::LaserScan scan_right_copy = *msg_right;
+
+    // 投影并变换坐标，合并到 combined_2d_raw
+    projectScanToCloud(scan_left_copy, local_p_left, f_left, combined_2d_raw);
+    projectScanToCloud(scan_right_copy, local_p_right, f_right, combined_2d_raw);
+
+    // 4. 统一执行 2D 去噪
+    static SingleLineNoiseFilter unified_2d_noise_filter;
+    unified_2d_noise_filter.process(combined_2d_raw);
+
+    // 5. 统一执行车体过滤
+    buf_left.filt->clear();
+    if (!combined_2d_raw->empty()) {
+        filter_core_ptr_->filterVehicleBody(combined_2d_raw, buf_left.filt, vehicleSize);
     }
 
-    if (pub_points_raw.getNumSubscribers() > 0) {
-        g_merged_raw->clear();
-        g_merged_raw->reserve(buf_main.calib->size() + buf_mid.calib->size() + buf_left.calib->size() + buf_right.calib->size());
-        *g_merged_raw += *buf_main.calib; *g_merged_raw += *buf_mid.calib;
-        *g_merged_raw += *buf_left.calib; *g_merged_raw += *buf_right.calib;
-        sensor_msgs::PointCloud2 raw_msg;
-        pcl::toROSMsg(*g_merged_raw, raw_msg);
-        raw_msg.header = msg_16->header; raw_msg.header.frame_id = parent_frame_;
-        pub_points_raw.publish(raw_msg);
-    }
+    // --- 重点：在这里定义 total_filt，确保它在 debug_mode 块的作用域之外 ---
+    size_t total_filt = buf_main.filt->size() + buf_mid.filt->size() + buf_left.filt->size();
 
-    static SingleLineNoiseFilter left_noise_filter;
-    static SingleLineNoiseFilter right_noise_filter;
-
-    left_noise_filter.process(buf_left.filt);
-    right_noise_filter.process(buf_right.filt);
-
-    static pcl::PointCloud<pcl::PointXYZI>::Ptr merged_cloud(new pcl::PointCloud<pcl::PointXYZI>());
+    // 6. 合并最终输出
     static pcl::PointCloud<pcl::PointXYZI>::Ptr final_output(new pcl::PointCloud<pcl::PointXYZI>());
-    
-    merged_cloud->clear();
     final_output->clear();
 
-    size_t total_filt = buf_main.filt->size() + buf_mid.filt->size() + buf_left.filt->size() + buf_right.filt->size();
-
     if (pub_merged_filter_.getNumSubscribers() > 0) {
-        merged_cloud->reserve(total_filt);
-        *merged_cloud += *buf_main.filt; 
-        *merged_cloud += *buf_mid.filt; 
+        *final_output += *buf_main.filt; 
+        *final_output += *buf_mid.filt; 
         
         if (enable_single_lidar_fusion) {
-            *merged_cloud += *buf_left.filt; 
-            *merged_cloud += *buf_right.filt;
+            *final_output += *buf_left.filt; 
         }
 
-        filter_core_ptr_->pointcloud_filter(merged_cloud, final_output, true);
+        // 执行最后的环境整体滤波（高度截断等）
+        // filter_core_ptr_->pointcloud_filter(final_output, final_output, true);
         
-        charging_station_polygon_.reset();  
-        filter_core_ptr_->filterChargingStation(final_output);
-        
-        if (debug_mode_ && charging_station_polygon_.polygon_points.empty()) {
-            geometry_msgs::Point p1, p2, p3, p4;
-            p1.x = 5.0; p1.y = -1.0; p1.z = 0.0; p2.x = 5.0; p2.y = 1.0; p2.z = 0.0;
-            p3.x = 7.0; p3.y = 1.0; p3.z = 0.0; p4.x = 7.0; p4.y = -1.0; p4.z = 0.0;
-            charging_station_polygon_.polygon_points.push_back(p1);
-            charging_station_polygon_.polygon_points.push_back(p2);
-            charging_station_polygon_.polygon_points.push_back(p3);
-            charging_station_polygon_.polygon_points.push_back(p4);
-            charging_station_polygon_.detected = true;
-            charging_station_polygon_.height = 1.5;
-        }
-
         sensor_msgs::PointCloud2 msg; 
         pcl::toROSMsg(*final_output, msg);
         msg.header = msg_16->header; 
@@ -579,30 +559,29 @@ void callback(const sensor_msgs::PointCloud2::ConstPtr &msg_16, const sensor_msg
         pub_merged_filter_.publish(msg);
     }
 
-    if (pub_charge_polygon_marker_.getNumSubscribers() > 0) publishChargingStationPolygon(msg_16->header);
-
+    // 7. Debug 统计输出
     if (debug_mode_) {
         auto end_time = std::chrono::high_resolution_clock::now();
         std::chrono::duration<double, std::milli> ms = end_time - start_time;
-        ROS_INFO_THROTTLE(1.0, "\n[Debug] Time: %.2f ms | Filtered: %lu -> %lu", ms.count(), total_filt, final_output->size());
+        
+        // 此时 total_filt 已经在上方定义，编译器不会再报错
+        ROS_INFO_THROTTLE(1.0, "\n[Debug] Time: %.2f ms | Filtered: %lu -> %lu", 
+                          ms.count(), total_filt, final_output->size());
+        
         publishSensorMarkers(msg_16->header);
     }
 
-    auto publish = [&](ros::Publisher& pub, const pcl::PointCloud<pcl::PointXYZI>::Ptr& cloud) {
-        if (pub.getNumSubscribers() > 0 && cloud) { 
-            sensor_msgs::PointCloud2 msg; 
-            pcl::toROSMsg(*cloud, msg);
-            msg.header = msg_16->header; msg.header.frame_id = parent_frame_; pub.publish(msg);
+    // 8. 发布其他调试话题 (16, mid, left 等)
+    auto publish_cloud = [&](ros::Publisher& pub, const pcl::PointCloud<pcl::PointXYZI>::Ptr& cloud) {
+        if (pub.getNumSubscribers() > 0 && !cloud->empty()) { 
+            sensor_msgs::PointCloud2 m; pcl::toROSMsg(*cloud, m);
+            m.header = msg_16->header; m.header.frame_id = parent_frame_; pub.publish(m);
         }
     };
 
-    publish(pub_16_filter_, buf_main.filt);
-    publish(pub_mid_filter_, buf_mid.filt);
-    publish(pub_left_filter_, buf_left.filt);
-    publish(pub_right_filter_, buf_right.filt);
-    publish(pub_mid_calib_, buf_mid.calib);
-    publish(pub_left_calib_, buf_left.calib);
-    publish(pub_right_calib_, buf_right.calib);
+    publish_cloud(pub_16_filter_, buf_main.filt);
+    publish_cloud(pub_mid_filter_, buf_mid.filt);
+    publish_cloud(pub_left_filter_, buf_left.filt); // 发布的 left_filter 其实是合并后的 2D 数据
 
     if (pub_car_marker_.getNumSubscribers() > 0) {
         visualization_msgs::MarkerArray ma; 

@@ -44,6 +44,18 @@ consistency:
   max_angle: 20.0
   diff_dist: 0.5
 
+regions:
+  left:
+    enable: 1
+    max_dis: 15.0
+    a: 0.0    # 有效起始角度 (deg)
+    b: 180.0  # 有效结束角度 (deg)
+  right:
+    enable: 1
+    max_dis: 15.0
+    a: 180.0
+    b: 360.0
+
 # 充电桩识别参数
 charge:
   enble: true
