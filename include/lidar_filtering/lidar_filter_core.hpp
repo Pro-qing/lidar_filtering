@@ -16,41 +16,68 @@
 #include <pcl/common/common.h> 
 #include <pcl/filters/radius_outlier_removal.h>
 
-// 包含动态配置的头文件
-#include <lidar_filtering/LidarFilteringConfig.h>
-
 #include <vector>
 #include <mutex>
 #include <atomic>
 #include <memory>
+
+// 原生 C++ 配置体
+struct NativeFilterConfig {
+    double crop_radius = 8.0;
+    double crop_radius_x = 5.0;
+    double height_max = 0.0;
+    double height_min = -3.0;
+    double height_filt = -0.0;
+    bool filter_floor = true;
+    
+    double voxel_filter = 0.1;
+    bool voxel_filter_auto = false;
+    double voxel_filter_eleva = 0.1;
+    
+    bool filter_transient = true;
+    int neighboring_points = 10;
+    double stand_threshold = 0.8;
+    bool time_consistency_filter = true;
+    
+    bool radius_enble = true;
+    double radius_radius = 0.15;
+    int radius_min_neighbors = 2;
+
+    bool charge_enble = true;
+    double charge_length = 1.2;
+    double charge_wide = 1.2;
+    double charge_high = 1.2;
+    double charge_error = 1.2;
+
+    double vehicle_height = 1.0;
+
+    bool consistency_enable = false;
+    double consistency_min_angle = -30.0;
+    double consistency_max_angle = 30.0;
+    double consistency_diff_dist = 1.2;
+};
 
 class LidarFilterCore {
 public:
     LidarFilterCore(ros::NodeHandle &nh, ros::NodeHandle &private_nh);
     ~LidarFilterCore() = default;
 
-    // 接收 RQT 下发的动态参数更新
-    void updateDynamicConfig(const lidar_filtering::LidarFilteringConfig& config);
+    void updateNativeConfig(const NativeFilterConfig& config);
 
-    // 通用点云滤波器
     void pointcloud_filter(pcl::PointCloud<pcl::PointXYZI>::Ptr in_cloud_ptr,
                            pcl::PointCloud<pcl::PointXYZI>::Ptr filter_cloud_ptr,
                            bool update_history = true);
 
-    // PCL标准版滤波器
     void pointcloud_filter_pcl(pcl::PointCloud<pcl::PointXYZI>::Ptr in_cloud_ptr,
                                pcl::PointCloud<pcl::PointXYZI>::Ptr filter_cloud_ptr,
                                bool update_history = true);
 
-    // 独立的充电桩过滤函数 
     void filterChargingStation(pcl::PointCloud<pcl::PointXYZI>::Ptr cloud);
 
-    // 车身去除
     void filterVehicleBody(pcl::PointCloud<pcl::PointXYZI>::Ptr in_cloud_ptr,
                            pcl::PointCloud<pcl::PointXYZI>::Ptr out_cloud_ptr,
                            const std::vector<geometry_msgs::Point>& vehicle_polygon);
 
-    // 双雷达一致性校验
     void checkScanConsistency(sensor_msgs::LaserScan& left, sensor_msgs::LaserScan& right, 
                               double left_yaw, double right_yaw);
 
@@ -60,7 +87,7 @@ public:
     static void filterScanMsg(sensor_msgs::LaserScan& scan, double min_angle_deg, double max_angle_deg, double max_dis, bool is_limit_mode = false, double limit_min_deg = 0, double limit_max_deg = 0);
     static void filterScanMsgDualInterval(sensor_msgs::LaserScan& scan, double a, double b, double c, double d, double max_dis, bool is_limit_mode = false, double limit_min_deg = 0, double limit_max_deg = 0, double limit_dis = 0.0);
 
-    bool charge_enble_;
+    bool charge_enble_ = true;
     std::atomic<int> fliter_charge_{0};
 
 private:
@@ -75,41 +102,16 @@ private:
     ros::Publisher marker_pub_;
     ros::Timer charge_timer_;
 
-    // 参数访问保护锁
     std::mutex core_param_mutex_;
+    NativeFilterConfig config_;
 
-    // Params
-    double crop_radius_, crop_radius_x_;
-    bool filter_floor_;
-    double height_max_, height_min_, height_filt_;
-    
-    double voxel_filter_, voxel_filter_eleva_;
-    bool voxel_filter_auto_;
     bool enbleElevator_ = false;
-
-    bool filter_transient_;
-    int neighboring_points_;
-    double stand_threshold_;
-    bool time_consistency_filter_;
-
-    bool radius_enble_;
-    double radius_radius_;
-    int radius_min_neighbors_;
-
-    double charge_length_, charge_wide_, charge_high_, charge_error_;
-    double vehicle_height_; 
-
-    bool consistency_enable_;
-    double consistency_min_angle_;
-    double consistency_max_angle_;
-    double consistency_diff_dist_;
 
     pcl::PointCloud<pcl::PointXYZI> prev_non_ground_cloud_;
     std::mutex history_mutex_;
     std::vector<geometry_msgs::Pose> fliterpose_;
     geometry_msgs::Pose transPose_;
 
-    // 【新增】用于消除 OpenMP 线程内部动态分配的缓冲池
     std::vector<std::vector<pcl::PointXYZI>> omp_buffers_filter_;
     std::vector<std::vector<pcl::PointXYZI>> omp_buffers_vehicle_;
 

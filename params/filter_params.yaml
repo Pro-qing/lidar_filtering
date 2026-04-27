@@ -1,0 +1,53 @@
+# ==========================================
+# 点云过滤与控制参数配置
+# ==========================================
+
+# 雷达区域过滤控制
+regions:
+  main:  { enable: 0, min_angle: 0.0, max_angle: 360.0, max_dis: 0.0, a: 0.0, b: 360.0, c: 0.0, d: 360.0 }
+  top:   { enable: 1, min_angle: 0.0, max_angle: 360.0, max_dis: 0.0, a: 0.0, b: 360.0, c: 0.0, d: 360.0 }
+  left:  { enable: 1, min_angle: 210.0, max_angle: 70.0, max_dis: 1.5, a: 129.0, b: 209.0, c: 210.0, d: 270.0 }
+  right: { enable: 1, min_angle: 270.0, max_angle: 150.0, max_dis: 1.5, a: 0.0, b: 180.0, c: 220.0, d: 360.0 }
+
+# 速度动态限制过滤
+speed_limits:
+  maxSpeed: 1.2
+  maxLimitDis_speed: 0.5
+  leftLimit_min_angle: 190.0
+  leftLimit_max_angle: 90.0
+  rightLimit_min_angle: 250.0
+  rightLimit_max_angle: 170.0
+
+# 核心滤波参数
+core:
+  crop_radius: 8.0
+  crop_radius_x: 5.0
+  height_max: 0.0
+  height_min: -1.85
+  height_filt: -5.0
+  filter_floor: true
+  voxel_filter: 0.1
+  voxel_filter_auto: false
+  voxel_filter_eleva: 0.1
+  filter_transient: true
+  neighboring_points: 10
+  stand_threshold: 0.8
+  time_consistency_filter: true
+  radius_enble: true
+  radius_radius: 0.15
+  radius_min_neighbors: 2
+
+# 双雷达一致性校验
+consistency:
+  enable: true
+  min_angle: -20.0
+  max_angle: 20.0
+  diff_dist: 0.5
+
+# 充电桩识别参数
+charge:
+  enble: true
+  length: 1.2
+  wide: 1.2
+  high: 1.2
+  error: 1.2

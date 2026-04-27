@@ -1,27 +1,31 @@
 <?xml version="1.0"?>
 <package format="2">
   <name>lidar_filtering</name>
-  <version>0.0.1</version>
-  <description>Multi-Lidar Calibration and Filtering Package</description>
-  <maintainer email="getq@todo.todo">User</maintainer>
-  <license>MIT</license>
+  <version>0.0.0</version>
+  <description>The lidar_filtering package with pure YAML configuration</description>
+
+  <maintainer email="getq@todo.todo">getq</maintainer>
+  <license>TODO</license>
 
   <buildtool_depend>catkin</buildtool_depend>
-  <depend>roscpp</depend>
-  <depend>sensor_msgs</depend>
-  <depend>geometry_msgs</depend>
-  <depend>std_msgs</depend>
-  <depend>pcl_ros</depend>
-  <depend>pcl_conversions</depend>
-  <depend>message_filters</depend>
-  <depend>tf</depend>
-  <depend>tf2</depend>
-  <depend>tf2_ros</depend>
-  <depend>tf2_geometry_msgs</depend>
-  <depend>laser_geometry</depend>
-  <depend>dynamic_reconfigure</depend>
-  <!-- 如果没有 autoware_msgs 可以注释掉相关代码，或者安装依赖 -->
-  <depend>autoware_msgs</depend>
-  <depend>autoware_can_msgs</depend>
-  <depend>visualization_msgs</depend>
+  <build_depend>roscpp</build_depend>
+  <build_depend>sensor_msgs</build_depend>
+  <build_depend>pcl_ros</build_depend>
+  <build_depend>pcl_conversions</build_depend>
+  <build_depend>autoware_can_msgs</build_depend>
+  <build_depend>autoware_msgs</build_depend>
+  <build_depend>laser_geometry</build_depend>
+  <build_depend>tf2_ros</build_depend>
+  <build_depend>tf2_geometry_msgs</build_depend>
+  <depend>yaml-cpp</depend>
+
+  <exec_depend>roscpp</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>pcl_ros</exec_depend>
+  <exec_depend>pcl_conversions</exec_depend>
+  <exec_depend>autoware_can_msgs</exec_depend>
+  <exec_depend>autoware_msgs</exec_depend>
+  <exec_depend>laser_geometry</exec_depend>
+  <exec_depend>tf2_ros</exec_depend>
+  <exec_depend>tf2_geometry_msgs</exec_depend>
 </package>

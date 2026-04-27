@@ -1,6 +1,5 @@
 #include "lidar_filtering/lidar_filter_core.hpp"
-#include <lidar_filtering/LidarFilteringConfig.h>
-#include <dynamic_reconfigure/server.h>
+#include <yaml-cpp/yaml.h>
 #include <message_filters/subscriber.h>
 #include <message_filters/synchronizer.h>
 #include <message_filters/sync_policies/approximate_time.h>
@@ -11,7 +10,6 @@
 #include <autoware_msgs/Waypoint.h>
 #include <visualization_msgs/MarkerArray.h>
 
-// 显式引入所有需要的 C++ 基础标准库头文件
 #include <new>
 #include <future>
 #include <thread>
@@ -25,9 +23,6 @@
 #include <memory>
 #include <iterator>
 
-#include <ros/package.h>
-
-// 用于 inotify 事件监听、非阻塞 poll 和多线程安全
 #include <sys/inotify.h>
 #include <poll.h>
 #include <unistd.h>
@@ -50,9 +45,9 @@ std::string parent_frame_;
 std::vector<geometry_msgs::Point> vehicleSize;
 autoware_can_msgs::CANInfo can_info_;
 bool debug_mode_ = false;
-
-// 全局变量：控制单线雷达是否参与融合
 bool enable_single_lidar_fusion = true;
+
+NativeFilterConfig g_config;
 
 struct ChargingStationPolygon {
     bool detected = false;
@@ -77,7 +72,6 @@ struct LidarBuffers {
     }
 };
 
-// 【全局缓冲池】避免多线程或多帧冲突
 LidarBuffers buf_main, buf_mid, buf_left, buf_right;
 pcl::PointCloud<pcl::PointXYZI>::Ptr g_merged_raw(new pcl::PointCloud<pcl::PointXYZI>());
 
@@ -94,17 +88,189 @@ struct CalibrationParams {
 };
 
 struct FilterParams { 
-    int enable; 
-    double min_angle, max_angle, max_dis; 
+    int enable = 1; 
+    double min_angle = 0, max_angle = 360, max_dis = 100; 
     double a = 0, b = 360, c = 0, d = 360; 
 };
 
 std::mutex calib_mutex;
 CalibrationParams p_main, p_mid, p_left, p_right;
-
 FilterParams f_main, f_mid, f_left, f_right;
-double maxSpeed, maxLimitDis_speed;
-double leftLimit_min, leftLimit_max, rightLimit_min, rightLimit_max;
+double maxSpeed = 1.2, maxLimitDis_speed = 0.5;
+double leftLimit_min = 0, leftLimit_max = 0, rightLimit_min = 0, rightLimit_max = 0;
+
+// === YAML 解析函数：车辆配置 ===
+void reloadVehicleSizeYaml(const std::string& filepath) {
+    try {
+        YAML::Node yaml = YAML::LoadFile(filepath);
+        if (yaml["vehicle_rect"]) {
+            std::vector<geometry_msgs::Point> new_rect;
+            for (const auto& pt : yaml["vehicle_rect"]) {
+                geometry_msgs::Point p;
+                p.x = pt["x"].as<double>(); p.y = pt["y"].as<double>(); p.z = 0;
+                new_rect.push_back(p);
+            }
+            if(!new_rect.empty()) vehicleSize = new_rect;
+        } else if (yaml["rect"]) { // 兼容老写法
+            std::vector<geometry_msgs::Point> new_rect;
+            for (const auto& pt : yaml["rect"]) {
+                geometry_msgs::Point p;
+                p.x = pt["x"].as<double>(); p.y = pt["y"].as<double>(); p.z = 0;
+                new_rect.push_back(p);
+            }
+            if(!new_rect.empty()) vehicleSize = new_rect;
+        }
+        if(yaml["vehicle_height"]) g_config.vehicle_height = yaml["vehicle_height"].as<double>(1.0);
+        
+        if (filter_core_ptr_) filter_core_ptr_->updateNativeConfig(g_config);
+        ROS_INFO("\033[1;32m[Config] Loaded Vehicle Size from %s!\033[0m", filepath.c_str());
+    } catch (const YAML::Exception& e) {
+        ROS_ERROR("Failed to parse Vehicle Size YAML: %s", e.what());
+    }
+}
+
+// === YAML 解析函数：雷达标定（兼容带有下划线前缀的格式） ===
+void reloadCalibrationYaml(const std::string& filepath) {
+    try {
+        YAML::Node yaml = YAML::LoadFile(filepath);
+        
+        if (yaml["tf_calibration"]) {
+            std::lock_guard<std::mutex> lock(calib_mutex);
+            auto tf = yaml["tf_calibration"];
+            
+            auto parseCalib = [&](const std::string& prefix, CalibrationParams& cp) {
+                if (tf[prefix + "_x"]) cp.x = tf[prefix + "_x"].as<double>(cp.x);
+                if (tf[prefix + "_y"]) cp.y = tf[prefix + "_y"].as<double>(cp.y);
+                if (tf[prefix + "_z"]) cp.z = tf[prefix + "_z"].as<double>(cp.z);
+                if (tf[prefix + "_yaw"]) cp.yaw = tf[prefix + "_yaw"].as<double>(cp.yaw);
+                if (tf[prefix + "_pitch"]) cp.pitch = tf[prefix + "_pitch"].as<double>(cp.pitch);
+                if (tf[prefix + "_roll"]) cp.roll = tf[prefix + "_roll"].as<double>(cp.roll);
+            };
+            
+            parseCalib("main", p_main);
+            parseCalib("top", p_mid);
+            parseCalib("left", p_left);
+            parseCalib("right", p_right);
+        }
+        ROS_INFO("\033[1;32m[Config] Loaded Calibration from %s!\033[0m", filepath.c_str());
+    } catch (const YAML::Exception& e) { 
+        ROS_ERROR("Failed to parse Calibration YAML: %s", e.what()); 
+    }
+}
+
+// === YAML 解析函数：滤波与区域配置 ===
+void reloadFilterParamsYaml(const std::string& filepath) {
+    try {
+        YAML::Node yaml = YAML::LoadFile(filepath);
+
+        if (yaml["regions"]) {
+            auto parseRegion = [&](const std::string& name, FilterParams& fp) {
+                if(yaml["regions"][name]) {
+                    auto n = yaml["regions"][name];
+                    fp.enable = n["enable"].as<int>(fp.enable);
+                    fp.min_angle = n["min_angle"].as<double>(fp.min_angle);
+                    fp.max_angle = n["max_angle"].as<double>(fp.max_angle);
+                    fp.max_dis = n["max_dis"].as<double>(fp.max_dis);
+                    fp.a = n["a"].as<double>(fp.a); fp.b = n["b"].as<double>(fp.b);
+                    fp.c = n["c"].as<double>(fp.c); fp.d = n["d"].as<double>(fp.d);
+                }
+            };
+            parseRegion("main", f_main); parseRegion("top", f_mid); 
+            parseRegion("left", f_left); parseRegion("right", f_right);
+        }
+
+        if (yaml["speed_limits"]) {
+            auto s = yaml["speed_limits"];
+            maxSpeed = s["maxSpeed"].as<double>(1.2);
+            maxLimitDis_speed = s["maxLimitDis_speed"].as<double>(0.5);
+            leftLimit_min = s["leftLimit_min_angle"].as<double>(190.0);
+            leftLimit_max = s["leftLimit_max_angle"].as<double>(90.0);
+            rightLimit_min = s["rightLimit_min_angle"].as<double>(250.0);
+            rightLimit_max = s["rightLimit_max_angle"].as<double>(170.0);
+        }
+
+        if (yaml["core"]) {
+            auto cr = yaml["core"];
+            g_config.crop_radius = cr["crop_radius"].as<double>(g_config.crop_radius);
+            g_config.crop_radius_x = cr["crop_radius_x"].as<double>(g_config.crop_radius_x);
+            g_config.height_max = cr["height_max"].as<double>(g_config.height_max);
+            g_config.height_min = cr["height_min"].as<double>(g_config.height_min);
+            g_config.height_filt = cr["height_filt"].as<double>(g_config.height_filt);
+            g_config.filter_floor = cr["filter_floor"].as<bool>(g_config.filter_floor);
+            g_config.voxel_filter = cr["voxel_filter"].as<double>(g_config.voxel_filter);
+            g_config.voxel_filter_eleva = cr["voxel_filter_eleva"].as<double>(g_config.voxel_filter_eleva);
+            g_config.filter_transient = cr["filter_transient"].as<bool>(g_config.filter_transient);
+            g_config.radius_enble = cr["radius_enble"].as<bool>(g_config.radius_enble);
+            g_config.radius_radius = cr["radius_radius"].as<double>(g_config.radius_radius);
+            g_config.radius_min_neighbors = cr["radius_min_neighbors"].as<int>(g_config.radius_min_neighbors);
+        }
+
+        if (yaml["consistency"]) {
+            auto cs = yaml["consistency"];
+            g_config.consistency_enable = cs["enable"].as<bool>(g_config.consistency_enable);
+            g_config.consistency_min_angle = cs["min_angle"].as<double>(g_config.consistency_min_angle);
+            g_config.consistency_max_angle = cs["max_angle"].as<double>(g_config.consistency_max_angle);
+            g_config.consistency_diff_dist = cs["diff_dist"].as<double>(g_config.consistency_diff_dist);
+        }
+
+        if (yaml["charge"]) {
+            auto cg = yaml["charge"];
+            g_config.charge_enble = cg["enble"].as<bool>(g_config.charge_enble);
+            g_config.charge_length = cg["length"].as<double>(g_config.charge_length);
+            g_config.charge_wide = cg["wide"].as<double>(g_config.charge_wide);
+            g_config.charge_high = cg["high"].as<double>(g_config.charge_high);
+            g_config.charge_error = cg["error"].as<double>(g_config.charge_error);
+        }
+
+        if (filter_core_ptr_) filter_core_ptr_->updateNativeConfig(g_config);
+        ROS_INFO("\033[1;32m[Config] Loaded Filter Params from %s!\033[0m", filepath.c_str());
+    } catch (const YAML::Exception& e) {
+        ROS_ERROR("Failed to parse Filter Params YAML: %s", e.what());
+    }
+}
+
+// === 热监听逻辑：支持监听一个目录下的多个文件 ===
+void watchMultipleConfigs(const std::string& dir_path, 
+                          const std::string& f_vehicle, 
+                          const std::string& f_calib, 
+                          const std::string& f_filter) {
+    if (dir_path.empty()) return;
+
+    int fd = inotify_init1(IN_NONBLOCK);
+    int wd = inotify_add_watch(fd, dir_path.c_str(), IN_CLOSE_WRITE | IN_MOVED_TO);
+    if (wd < 0) { close(fd); return; }
+
+    struct pollfd pfd; pfd.fd = fd; pfd.events = POLLIN; char buffer[2048];
+
+    while (ros::ok()) {
+        if (poll(&pfd, 1, 1000) > 0 && (pfd.revents & POLLIN)) {
+            int len = read(fd, buffer, sizeof(buffer));
+            bool reload_veh = false, reload_cal = false, reload_fil = false;
+
+            for (int i = 0; i < len;) {
+                struct inotify_event *event = (struct inotify_event *) &buffer[i];
+                if (event->len) {
+                    std::string changed_file = event->name;
+                    if (changed_file == f_vehicle) reload_veh = true;
+                    if (changed_file == f_calib) reload_cal = true;
+                    if (changed_file == f_filter) reload_fil = true;
+                }
+                i += sizeof(struct inotify_event) + event->len;
+            }
+
+            if (reload_veh || reload_cal || reload_fil) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(100)); 
+            }
+
+            if (reload_veh) reloadVehicleSizeYaml(dir_path + "/" + f_vehicle);
+            if (reload_cal) reloadCalibrationYaml(dir_path + "/" + f_calib);
+            if (reload_fil) reloadFilterParamsYaml(dir_path + "/" + f_filter);
+        }
+    }
+    inotify_rm_watch(fd, wd); close(fd);
+}
+
+// ---------------- 以下为原工程完整保留的回调与核心流程计算函数 ----------------
 
 void canInfoCallback(const autoware_can_msgs::CANInfo::ConstPtr &msg) { can_info_ = *msg; }
 
@@ -229,7 +395,6 @@ void processScan(sensor_msgs::LaserScan scan_copy, CalibrationParams calib, Filt
         LidarFilterCore::filterScanMsgDualInterval(scan_strict, filter.a, filter.b, filter.c, filter.d, filter.max_dis, limit_mode, limit_min, limit_max, maxLimitDis_speed); 
         sensor_msgs::PointCloud2 strict_msg;
         
-        // 使用 static 复用内存
         static pcl::PointCloud<pcl::PointXYZI>::Ptr cloud_strict(new pcl::PointCloud<pcl::PointXYZI>);
         static pcl::PointCloud<pcl::PointXYZI>::Ptr env_cloud(new pcl::PointCloud<pcl::PointXYZI>);
         cloud_strict->clear(); 
@@ -250,7 +415,6 @@ void processCloud(const sensor_msgs::PointCloud2::ConstPtr &cloud_msg, Calibrati
     pcl::fromROSMsg(*cloud_msg, *buf.calib);
     pcl::transformPointCloud(*buf.calib, *buf.calib, calib.getMatrix());
     if (filter.enable) {
-        // 【消灭内存碎片】使用 static 复用内存
         static pcl::PointCloud<pcl::PointXYZI>::Ptr env_cloud(new pcl::PointCloud<pcl::PointXYZI>);
         env_cloud->clear();
         
@@ -260,14 +424,13 @@ void processCloud(const sensor_msgs::PointCloud2::ConstPtr &cloud_msg, Calibrati
     }
 }
 
-// ================== 单线雷达专用：综合噪点过滤器 ==================
+// 单线雷达专用：综合噪点过滤器
 struct SingleLineNoiseFilter {
     std::map<int, int> history_hits;
-    int FRAME_THRESHOLD = 3;           // 必须连续出现 3 帧
-    float DIST_THRESHOLD = 1.6f;       // 仅针对 0.6 米内数据
-    float INTENSITY_THRESHOLD = 5.0f; // 强度阈值，针对灯光噪点
+    int FRAME_THRESHOLD = 3;           
+    float DIST_THRESHOLD = 1.6f;       
+    float INTENSITY_THRESHOLD = 5.0f; 
 
-    // 类成员缓存
     pcl::PointCloud<pcl::PointXYZI>::Ptr near_cloud;
     pcl::PointCloud<pcl::PointXYZI>::Ptr far_cloud;
     pcl::PointCloud<pcl::PointXYZI>::Ptr ror_cleaned;
@@ -287,17 +450,14 @@ struct SingleLineNoiseFilter {
     void process(pcl::PointCloud<pcl::PointXYZI>::Ptr& cloud) {
         if (cloud->empty()) return;
 
-        // 每次调用清空复用的容器
         near_cloud->clear();
         far_cloud->clear();
         ror_cleaned->clear();
         final_near_cloud->clear();
 
-        // 1. 距离分段 + 强度预筛
         for (const auto& pt : *cloud) {
             float dist = std::sqrt(pt.x * pt.x + pt.y * pt.y);
             if (dist < DIST_THRESHOLD) {
-                // 路灯/阳光噪点强度极低，直接丢弃
                 if (pt.intensity < INTENSITY_THRESHOLD) continue; 
                 near_cloud->push_back(pt);
             } else {
@@ -305,23 +465,19 @@ struct SingleLineNoiseFilter {
             }
         }
 
-        // 如果近处没点，清空历史并直接替换数据(极速模式)
         if (near_cloud->empty()) {
             history_hits.clear();
             cloud->swap(*far_cloud); 
             return;
         }
 
-        // 2. 空间滤波：半径孤立点去除 (ROR)
         ror_filter.setInputCloud(near_cloud);
         ror_filter.filter(*ror_cleaned);
 
-        // 3. 时间滤波：多帧确认机制
         std::map<int, int> current_hits;
         for (const auto& pt : *ror_cleaned) {
             float angle = std::atan2(pt.y, pt.x) * 180.0 / M_PI;
-            // 降低角度分辨率到 1度 (angle * 1.0)，增加运动容错率
-            int angle_idx = static_cast<int>(angle * 0.025); // 40度一个栅格
+            int angle_idx = static_cast<int>(angle * 0.025); 
 
             current_hits[angle_idx] = history_hits[angle_idx] + 1;
 
@@ -329,16 +485,14 @@ struct SingleLineNoiseFilter {
                 final_near_cloud->push_back(pt);
             }
         }
-        history_hits = current_hits; // 滑动覆盖历史记录
+        history_hits = current_hits;
 
-        // 4. 组装输出
         cloud->clear();
         cloud->reserve(final_near_cloud->size() + far_cloud->size());
         *cloud += *final_near_cloud;
         *cloud += *far_cloud;
     }
 };
-// =================================================================
 
 void callback(const sensor_msgs::PointCloud2::ConstPtr &msg_16, const sensor_msgs::PointCloud2::ConstPtr &msg_mid, const sensor_msgs::LaserScan::ConstPtr &msg_left, const sensor_msgs::LaserScan::ConstPtr &msg_right) {
     auto start_time = std::chrono::high_resolution_clock::now();
@@ -357,7 +511,6 @@ void callback(const sensor_msgs::PointCloud2::ConstPtr &msg_16, const sensor_msg
 
     filter_core_ptr_->checkScanConsistency(scan_left_copy, scan_right_copy, local_p_left.yaw, local_p_right.yaw);
 
-    // 顺序调用，消除因异步导致的 OpenMP 内存暴涨
     processCloud(msg_16, local_p_main, f_main, buf_main, false);
     processCloud(msg_mid, local_p_mid, f_mid, buf_mid, true);
     processScan(scan_left_copy, local_p_left, f_left, check_speed, leftLimit_min, leftLimit_max, buf_left);
@@ -378,15 +531,12 @@ void callback(const sensor_msgs::PointCloud2::ConstPtr &msg_16, const sensor_msg
         pub_points_raw.publish(raw_msg);
     }
 
-    // 实例化两个静态对象，保证生命周期贯穿整个程序，且左右雷达的历史状态互不干扰
     static SingleLineNoiseFilter left_noise_filter;
     static SingleLineNoiseFilter right_noise_filter;
 
-    // 独立执行 强度 + 半径 + 多帧确认 过滤
     left_noise_filter.process(buf_left.filt);
     right_noise_filter.process(buf_right.filt);
 
-    // 【消灭内存碎片】局部点云合并缓冲区改为 static
     static pcl::PointCloud<pcl::PointXYZI>::Ptr merged_cloud(new pcl::PointCloud<pcl::PointXYZI>());
     static pcl::PointCloud<pcl::PointXYZI>::Ptr final_output(new pcl::PointCloud<pcl::PointXYZI>());
     
@@ -461,25 +611,6 @@ void callback(const sensor_msgs::PointCloud2::ConstPtr &msg_16, const sensor_msg
     }
 }
 
-// 供 dynamic_reconfigure 回调
-void param_callback(lidar_filtering::LidarFilteringConfig &config, uint32_t level) {
-    if (filter_core_ptr_) {
-        filter_core_ptr_->updateDynamicConfig(config);
-    }
-
-    double la = f_left.a, lb = f_left.b, lc = f_left.c, ld = f_left.d;
-    double ra = f_right.a, rb = f_right.b, rc = f_right.c, rd = f_right.d;
-
-    f_main = {config.main_filter_enable, config.main_min_angle, config.main_max_angle, 0};
-    f_mid  = {config.top_filter_enable, config.top_min_angle, config.top_max_angle, 0};
-    f_left = {config.left_filter_enable, config.left_min_angle, config.left_max_angle, config.left_max_dis, la, lb, lc, ld};
-    f_right= {config.right_filter_enable, config.right_min_angle, config.right_max_angle, config.right_max_dis, ra, rb, rc, rd};
-    
-    maxSpeed = config.maxSpeed; maxLimitDis_speed = config.maxLimitDis_speed;
-    leftLimit_min = config.leftLimit_min_angle; leftLimit_max = config.leftLimit_max_angle;
-    rightLimit_min = config.rightLimit_min_angle; rightLimit_max = config.rightLimit_max_angle;
-}
-
 void lqrWaypointCallback(const autoware_msgs::Waypoint::ConstPtr& msg) {
     if (!msg) return; 
     bool has_behavior_4 = (std::find(msg->wpsattr.routeBehavior.begin(), msg->wpsattr.routeBehavior.end(), 4) != msg->wpsattr.routeBehavior.end());
@@ -490,160 +621,41 @@ void lqrWaypointCallback(const autoware_msgs::Waypoint::ConstPtr& msg) {
     }
 }
 
-void reloadCalibrationYaml(const std::string& filepath) {
-    std::ifstream file(filepath);
-    if (!file.is_open()) {
-        ROS_WARN("Cannot open lidar_calibration.yaml at: %s", filepath.c_str());
-        return;
-    }
-
-    std::string line;
-    bool updated = false;
-
-    std::lock_guard<std::mutex> lock(calib_mutex);
-
-    while (std::getline(file, line)) {
-        size_t comment_pos = line.find('#');
-        if (comment_pos != std::string::npos) line = line.substr(0, comment_pos);
-
-        size_t colon_pos = line.find(':');
-        if (colon_pos == std::string::npos) continue;
-
-        std::string key = line.substr(0, colon_pos);
-        std::string val = line.substr(colon_pos + 1);
-
-        key.erase(0, key.find_first_not_of(" \t\r\n"));
-        key.erase(key.find_last_not_of(" \t\r\n") + 1);
-        val.erase(0, val.find_first_not_of(" \t\r\n"));
-        val.erase(val.find_last_not_of(" \t\r\n") + 1);
-
-        if (val.empty() || val == "null" || val == "~") continue;
-
-        try {
-            double num = std::stod(val);
-            updated = true;
-            
-            if(key == "main_x") p_main.x = num; else if(key == "main_y") p_main.y = num;
-            else if(key == "main_z") p_main.z = num; else if(key == "main_yaw") p_main.yaw = num;
-            else if(key == "main_pitch") p_main.pitch = num; else if(key == "main_roll") p_main.roll = num;
-            
-            else if(key == "top_x") p_mid.x = num; else if(key == "top_y") p_mid.y = num;
-            else if(key == "top_z") p_mid.z = num; else if(key == "top_yaw") p_mid.yaw = num;
-            else if(key == "top_pitch") p_mid.pitch = num; else if(key == "top_roll") p_mid.roll = num;
-
-            else if(key == "left_x") p_left.x = num; else if(key == "left_y") p_left.y = num;
-            else if(key == "left_z") p_left.z = num; else if(key == "left_yaw") p_left.yaw = num;
-            else if(key == "left_pitch") p_left.pitch = num; else if(key == "left_roll") p_left.roll = num;
-
-            else if(key == "right_x") p_right.x = num; else if(key == "right_y") p_right.y = num;
-            else if(key == "right_z") p_right.z = num; else if(key == "right_yaw") p_right.yaw = num;
-            else if(key == "right_pitch") p_right.pitch = num; else if(key == "right_roll") p_right.roll = num;
-        } catch (...) { /* ignore invalid numbers */ }
-    }
-
-    if (updated) {
-        ROS_INFO("\033[1;32m[Calibration] Loaded new parameters from %s!\033[0m", filepath.c_str());
-    }
-}
-
-void watchParamsDirectory(const std::string& full_path) {
-    if (full_path.empty()) return;
-
-    size_t last_slash_idx = full_path.find_last_of('/');
-    if (last_slash_idx == std::string::npos) {
-        ROS_ERROR("Invalid calibration file path (no directory provided): %s", full_path.c_str());
-        return;
-    }
-
-    std::string watch_dir = full_path.substr(0, last_slash_idx);
-    std::string watch_file = full_path.substr(last_slash_idx + 1);
-
-    int fd = inotify_init1(IN_NONBLOCK);
-    if (fd < 0) {
-        ROS_ERROR("Failed to initialize non-blocking inotify.");
-        return;
-    }
-
-    int wd = inotify_add_watch(fd, watch_dir.c_str(), IN_CLOSE_WRITE | IN_MOVED_TO);
-    if (wd < 0) {
-        ROS_ERROR("Failed to watch directory: %s", watch_dir.c_str());
-        close(fd);
-        return;
-    }
-
-    struct pollfd pfd;
-    pfd.fd = fd;
-    pfd.events = POLLIN;
-
-    char buffer[1024];
-    
-    while (ros::ok()) {
-        int ret = poll(&pfd, 1, 1000); 
-        
-        if (ret > 0 && (pfd.revents & POLLIN)) {
-            int length = read(fd, buffer, sizeof(buffer));
-            if (length > 0) {
-                int i = 0;
-                bool should_reload = false;
-                while (i < length) {
-                    struct inotify_event *event = (struct inotify_event *) &buffer[i];
-                    if (event->len && std::string(event->name) == watch_file) {
-                        should_reload = true;
-                    }
-                    i += sizeof(struct inotify_event) + event->len;
-                }
-                
-                if (should_reload) {
-                    std::this_thread::sleep_for(std::chrono::milliseconds(100));
-                    reloadCalibrationYaml(full_path);
-                }
-            }
-        }
-    }
-
-    inotify_rm_watch(fd, wd);
-    close(fd);
-}
-
 int main(int argc, char **argv) {
     ros::init(argc, argv, "multi_points");
     ros::NodeHandle nh; ros::NodeHandle p_nh("~");
-    filter_core_ptr_ = std::make_shared<LidarFilterCore>(nh, p_nh);
+    
+    p_nh.param<std::string>("parent_frame", parent_frame_, "velodyne");
     p_nh.param("debug_mode", debug_mode_, false);
 
-    p_nh.param("left_a", f_left.a, 0.0); p_nh.param("left_b", f_left.b, 0.0);
-    p_nh.param("left_c", f_left.c, 0.0); p_nh.param("left_d", f_left.d, 0.0);
-    p_nh.param("right_a", f_right.a, 0.0); p_nh.param("right_b", f_right.b, 0.0);
-    p_nh.param("right_c", f_right.c, 0.0); p_nh.param("right_d", f_right.d, 0.0);
+    // 回收之前默认防止空的情况
+    geometry_msgs::Point p_init; p_init.x=1; p_init.y=1; p_init.z=0; vehicleSize.push_back(p_init); 
+    p_init.x=1; p_init.y=-1; vehicleSize.push_back(p_init); p_init.x=-1; p_init.y=-1; vehicleSize.push_back(p_init); p_init.x=-1; p_init.y=1; vehicleSize.push_back(p_init); 
 
-    std::cout << "PCL version:" << PCL_VERSION << std::endl;
+    std::string path_vehicle, path_calib, path_filter;
+    p_nh.param<std::string>("vehicle_size_file", path_vehicle, "");
+    p_nh.param<std::string>("calibration_file", path_calib, "");
+    p_nh.param<std::string>("filter_params_file", path_filter, "");
 
-    XmlRpc::XmlRpcValue carpoints;
-    p_nh.getParam("rect", carpoints);
-    if (carpoints.getType() == XmlRpc::XmlRpcValue::TypeArray) {
-        for(int i=0; i<carpoints.size(); i++) { geometry_msgs::Point pt; pt.x=carpoints[i]["x"]; pt.y=carpoints[i]["y"]; vehicleSize.push_back(pt); }
-    } else { 
-        geometry_msgs::Point p; p.x=1; p.y=1; vehicleSize.push_back(p); 
-        p.x=1; p.y=-1; vehicleSize.push_back(p); p.x=-1; p.y=-1; vehicleSize.push_back(p); p.x=-1; p.y=1; vehicleSize.push_back(p); 
+    filter_core_ptr_ = std::make_shared<LidarFilterCore>(nh, p_nh);
+
+    if (!path_vehicle.empty()) reloadVehicleSizeYaml(path_vehicle);
+    if (!path_calib.empty()) reloadCalibrationYaml(path_calib);
+    if (!path_filter.empty()) reloadFilterParamsYaml(path_filter);
+
+    // 开始目录热监听
+    if (!path_vehicle.empty()) {
+        size_t last_slash = path_vehicle.find_last_of('/');
+        if (last_slash != std::string::npos) {
+            std::string watch_dir = path_vehicle.substr(0, last_slash);
+            std::string name_veh = path_vehicle.substr(last_slash + 1);
+            std::string name_cal = path_calib.substr(path_calib.find_last_of('/') + 1);
+            std::string name_fil = path_filter.substr(path_filter.find_last_of('/') + 1);
+
+            std::thread watcher_thread(watchMultipleConfigs, watch_dir, name_veh, name_cal, name_fil);
+            watcher_thread.detach();
+        }
     }
-
-    p_nh.param<std::string>("parent_frame", parent_frame_, "velodyne");
-
-    std::string calibration_file_path;
-    p_nh.param<std::string>("calibration_file_path", calibration_file_path, "");
-
-    if (calibration_file_path.empty()) {
-        std::string pkg_path = ros::package::getPath("lidar_filtering");
-        calibration_file_path = pkg_path + "/params/lidar_calibration.yaml";
-    }
-
-    reloadCalibrationYaml(calibration_file_path);
-
-    dynamic_reconfigure::Server<lidar_filtering::LidarFilteringConfig> server;
-    server.setCallback(boost::bind(&param_callback, _1, _2));
-
-    std::thread watcher_thread(watchParamsDirectory, calibration_file_path);
-    watcher_thread.detach();
 
     pub_merged_filter_ = nh.advertise<PointCloud2>("points_filter", 5);
     pub_points_raw = nh.advertise<PointCloud2>("points_raw", 5);
@@ -670,10 +682,8 @@ int main(int argc, char **argv) {
     Synchronizer<SyncPolicy> sync(SyncPolicy(10), sub_16, sub_mid, sub_left, sub_right);
     sync.registerCallback(boost::bind(&callback, _1, _2, _3, _4));
 
-    ROS_INFO("Lidar Filtering Node Started! Watching custom calibration path.");
+    ROS_INFO("Lidar Filtering Node Started! Pure YAML configuration mode.");
     ros::MultiThreadedSpinner spinner(4);
     spinner.spin();
     return 0;
 }
-
-

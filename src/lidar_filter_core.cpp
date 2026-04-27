@@ -1,29 +1,22 @@
 #include "lidar_filtering/lidar_filter_core.hpp"
 
-// 强制在头文件展开模板以防链接报错
 #ifndef PCL_NO_PRECOMPILE
 #define PCL_NO_PRECOMPILE 
 #endif
 
 #include <pcl/filters/voxel_grid.h>
 #include <pcl/filters/impl/voxel_grid.hpp>       
-
 #include <pcl/filters/passthrough.h>
 #include <pcl/filters/impl/passthrough.hpp>     
-
 #include <pcl/filters/statistical_outlier_removal.h>
 #include <pcl/filters/radius_outlier_removal.h>
 #include <pcl/filters/impl/radius_outlier_removal.hpp> 
-
 #include <pcl/segmentation/sac_segmentation.h>
 #include <pcl/segmentation/impl/sac_segmentation.hpp>  
-
 #include <pcl/filters/extract_indices.h>
 #include <pcl/filters/impl/extract_indices.hpp>        
-
 #include <pcl/sample_consensus/sac_model_plane.h> 
 #include <pcl/sample_consensus/impl/sac_model_plane.hpp> 
-
 #include <pcl_conversions/pcl_conversions.h>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.h>
 #include <tf2/utils.h>
@@ -33,36 +26,6 @@
 LidarFilterCore::LidarFilterCore(ros::NodeHandle &nh, ros::NodeHandle &private_nh) 
     : nh_(nh), private_nh_(private_nh), tf_listener_(tf_buffer_)
 {
-    // 初始化时从 ROS 参数服务器读取默认值
-    private_nh_.param("crop_radius", crop_radius_, 20.0);
-    private_nh_.param("crop_radius_x", crop_radius_x_, 0.0);
-    private_nh_.param("height_max", height_max_, 5.0);
-    private_nh_.param("height_min", height_min_, -2.5);
-    private_nh_.param("height_filt", height_filt_, -1.8);
-    private_nh_.param("voxel_filter", voxel_filter_, 0.1);
-    private_nh_.param("voxel_filter_auto", voxel_filter_auto_, false);
-    private_nh_.param("voxel_filter_eleva", voxel_filter_eleva_, 0.15);
-    private_nh_.param("filter_floor", filter_floor_, true);
-    private_nh_.param("filter_transient", filter_transient_, false);
-    private_nh_.param("neighboring_points", neighboring_points_, 30);
-    private_nh_.param("stand_threshold", stand_threshold_, 1.0);
-    private_nh_.param("radius_enble", radius_enble_, false);
-    private_nh_.param("radius_radius", radius_radius_, 0.2);
-    private_nh_.param("radius_min_neighbors", radius_min_neighbors_, 3);
-    private_nh_.param("charge_enble", charge_enble_, true);
-    private_nh_.param("charge_length", charge_length_, 1.0);
-    private_nh_.param("charge_wide", charge_wide_, 1.0);
-    private_nh_.param("charge_high", charge_high_, 1.0);
-    private_nh_.param("charge_error", charge_error_, 1.5);
-    private_nh_.param("vehicle_height", vehicle_height_, 1.0);
-    private_nh_.param("time_consistency_filter", time_consistency_filter_, false);
-
-    private_nh_.param("consistency_enable", consistency_enable_, false);
-    private_nh_.param("consistency_min_angle", consistency_min_angle_, -30.0);
-    private_nh_.param("consistency_max_angle", consistency_max_angle_, 30.0);
-    private_nh_.param("consistency_diff_dist", consistency_diff_dist_, 1.2);
-
-    // 初始化 OpenMP 缓冲池
     int max_threads = omp_get_max_threads();
     omp_buffers_filter_.resize(max_threads);
     omp_buffers_vehicle_.resize(max_threads);
@@ -73,33 +36,10 @@ LidarFilterCore::LidarFilterCore(ros::NodeHandle &nh, ros::NodeHandle &private_n
     charge_timer_ = nh_.createTimer(ros::Duration(0.2), &LidarFilterCore::chargeTimerCallback, this);
 }
 
-void LidarFilterCore::updateDynamicConfig(const lidar_filtering::LidarFilteringConfig& config) {
+void LidarFilterCore::updateNativeConfig(const NativeFilterConfig& config) {
     std::lock_guard<std::mutex> lock(core_param_mutex_);
-    crop_radius_ = config.crop_radius;
-    crop_radius_x_ = config.crop_radius_x;
-    height_max_ = config.height_max;
-    height_min_ = config.height_min;
-    height_filt_ = config.height_filt;
-    filter_floor_ = config.filter_floor;
-    voxel_filter_ = config.voxel_filter;
-    voxel_filter_auto_ = config.voxel_filter_auto;
-    voxel_filter_eleva_ = config.voxel_filter_eleva;
-    filter_transient_ = config.filter_transient;
-    neighboring_points_ = config.neighboring_points;
-    stand_threshold_ = config.stand_threshold;
-    time_consistency_filter_ = config.time_consistency_filter;
-    radius_enble_ = config.radius_enble;
-    radius_radius_ = config.radius_radius;
-    radius_min_neighbors_ = config.radius_min_neighbors;
+    config_ = config;
     charge_enble_ = config.charge_enble;
-    charge_length_ = config.charge_length;
-    charge_wide_ = config.charge_wide;
-    charge_high_ = config.charge_high;
-    charge_error_ = config.charge_error;
-    consistency_enable_ = config.consistency_enable;
-    consistency_min_angle_ = config.consistency_min_angle;
-    consistency_max_angle_ = config.consistency_max_angle;
-    consistency_diff_dist_ = config.consistency_diff_dist;
 }
 
 void LidarFilterCore::filterScanMsg(sensor_msgs::LaserScan& scan, double min_angle_deg, double max_angle_deg, double max_dis, bool is_limit_mode, double limit_min_deg, double limit_max_deg) 
@@ -182,21 +122,17 @@ void LidarFilterCore::filterScanMsgDualInterval(sensor_msgs::LaserScan& scan,
 void LidarFilterCore::checkScanConsistency(sensor_msgs::LaserScan& left, sensor_msgs::LaserScan& right, 
                                            double left_yaw, double right_yaw)
 {
-    bool enable;
-    double min_angle, max_angle, diff_dist;
+    NativeFilterConfig local_cfg;
     {
         std::lock_guard<std::mutex> lock(core_param_mutex_);
-        enable = consistency_enable_;
-        min_angle = consistency_min_angle_;
-        max_angle = consistency_max_angle_;
-        diff_dist = consistency_diff_dist_;
+        local_cfg = config_;
     }
 
-    if (!enable) return;
+    if (!local_cfg.consistency_enable) return;
 
-    double min_rad = min_angle * M_PI / 180.0;
-    double max_rad = max_angle * M_PI / 180.0;
-    double tol_dist = diff_dist;
+    double min_rad = local_cfg.consistency_min_angle * M_PI / 180.0;
+    double max_rad = local_cfg.consistency_max_angle * M_PI / 180.0;
+    double tol_dist = local_cfg.consistency_diff_dist;
 
     int left_size = left.ranges.size();
     double right_angle_min = right.angle_min;
@@ -244,28 +180,19 @@ void LidarFilterCore::pointcloud_filter(pcl::PointCloud<pcl::PointXYZI>::Ptr in_
     filter_cloud_ptr->clear();
     filter_cloud_ptr->reserve(in_cloud_ptr->size() * 0.5);
 
-    double local_crop_radius, local_crop_radius_x, z_min, z_max, z_floor;
-    double local_voxel_filter;
-    bool do_floor, charge_active, do_time_consistency;
+    NativeFilterConfig local_cfg;
+    bool charge_active;
     {
         std::lock_guard<std::mutex> lock(core_param_mutex_);
-        local_crop_radius = crop_radius_;
-        local_crop_radius_x = crop_radius_x_;
-        z_min = height_min_;
-        z_max = height_max_;
-        do_floor = filter_floor_;
-        z_floor = height_filt_;
-        local_voxel_filter = voxel_filter_;
+        local_cfg = config_;
         charge_active = charge_enble_ && charge_cache_.valid;
-        do_time_consistency = time_consistency_filter_;
     }
 
-    double r_sq_max = local_crop_radius * local_crop_radius;
+    double r_sq_max = local_cfg.crop_radius * local_cfg.crop_radius;
     if (r_sq_max > 6400.0) r_sq_max = 6400.0; 
-    double min_dist_sq = local_voxel_filter * local_voxel_filter;
+    double min_dist_sq = local_cfg.voxel_filter * local_cfg.voxel_filter;
     if (min_dist_sq < 0.0001) min_dist_sq = 0.0001;
 
-    // 【修改点】复用类成员缓存池，消灭局部动态分配
     int num_threads = omp_get_max_threads();
     for (int i = 0; i < num_threads; ++i) {
         omp_buffers_filter_[i].clear();
@@ -293,10 +220,10 @@ void LidarFilterCore::pointcloud_filter(pcl::PointCloud<pcl::PointXYZI>::Ptr in_
                 continue; 
             }
 
-            if (pt.z < z_min || pt.z > z_max) continue;
-            if (do_floor && pt.z < z_floor) continue;
+            if (pt.z < local_cfg.height_min || pt.z > local_cfg.height_max) continue;
+            if (local_cfg.filter_floor && pt.z < local_cfg.height_filt) continue;
             
-            double dx = pt.x - local_crop_radius_x;
+            double dx = pt.x - local_cfg.crop_radius_x;
             if ((dx * dx + pt.y * pt.y) > r_sq_max) continue;
             
             double d_sq = (pt.x-last_x)*(pt.x-last_x) + (pt.y-last_y)*(pt.y-last_y) + (pt.z-last_z)*(pt.z-last_z);
@@ -317,7 +244,7 @@ void LidarFilterCore::pointcloud_filter(pcl::PointCloud<pcl::PointXYZI>::Ptr in_
     filter_cloud_ptr->height = 1;
     filter_cloud_ptr->is_dense = true;
 
-    if (do_time_consistency && update_history) {
+    if (local_cfg.time_consistency_filter && update_history) {
         std::lock_guard<std::mutex> lock(history_mutex_);
         prev_non_ground_cloud_ = *filter_cloud_ptr;
     }
@@ -329,26 +256,12 @@ void LidarFilterCore::pointcloud_filter_pcl(pcl::PointCloud<pcl::PointXYZI>::Ptr
 {
     if (in_cloud_ptr->empty()) return;
 
-    double local_crop_radius, local_crop_radius_x, z_min, z_max;
-    double local_voxel, local_voxel_eleva;
-    bool do_floor, do_radius_filter;
-    double local_radius_radius;
-    int local_radius_neighbors;
+    NativeFilterConfig local_cfg;
     {
         std::lock_guard<std::mutex> lock(core_param_mutex_);
-        local_crop_radius = crop_radius_;
-        local_crop_radius_x = crop_radius_x_;
-        z_min = height_min_;
-        z_max = height_max_;
-        do_floor = filter_floor_;
-        local_voxel = voxel_filter_;
-        local_voxel_eleva = voxel_filter_eleva_;
-        do_radius_filter = radius_enble_;
-        local_radius_radius = radius_radius_;
-        local_radius_neighbors = radius_min_neighbors_;
+        local_cfg = config_;
     }
 
-    // 【修改点】移除 thread_local 关键字，仅保留 static，实现安全复用
     static pcl::PointCloud<pcl::PointXYZI>::Ptr tmp_cropped(new pcl::PointCloud<pcl::PointXYZI>);
     static pcl::PointCloud<pcl::PointXYZI>::Ptr tmp_voxel(new pcl::PointCloud<pcl::PointXYZI>);
     static pcl::PointCloud<pcl::PointXYZI>::Ptr tmp_nonground(new pcl::PointCloud<pcl::PointXYZI>);
@@ -357,12 +270,12 @@ void LidarFilterCore::pointcloud_filter_pcl(pcl::PointCloud<pcl::PointXYZI>::Ptr
 
     // Stage 1
     {
-        double safe_radius = (local_crop_radius > 80.0) ? 80.0 : local_crop_radius;
+        double safe_radius = (local_cfg.crop_radius > 80.0) ? 80.0 : local_cfg.crop_radius;
         double safe_r_sq = safe_radius * safe_radius;
         for (const auto& pt : in_cloud_ptr->points) {
             if (!std::isfinite(pt.x) || !std::isfinite(pt.y) || !std::isfinite(pt.z)) continue;
-            if (pt.z < z_min || pt.z > z_max) continue;
-            double dx = pt.x - local_crop_radius_x;
+            if (pt.z < local_cfg.height_min || pt.z > local_cfg.height_max) continue;
+            double dx = pt.x - local_cfg.crop_radius_x;
             if ((dx * dx + pt.y * pt.y) > safe_r_sq) continue;
             tmp_cropped->push_back(pt);
         }
@@ -371,7 +284,7 @@ void LidarFilterCore::pointcloud_filter_pcl(pcl::PointCloud<pcl::PointXYZI>::Ptr
 
     // Stage 2
     {
-        double leaf_size = enbleElevator_ ? local_voxel_eleva : local_voxel;
+        double leaf_size = enbleElevator_ ? local_cfg.voxel_filter_eleva : local_cfg.voxel_filter;
         if(leaf_size < 0.02) leaf_size = 0.02; 
         pcl::VoxelGrid<pcl::PointXYZI> vg;
         vg.setInputCloud(tmp_cropped);
@@ -382,7 +295,7 @@ void LidarFilterCore::pointcloud_filter_pcl(pcl::PointCloud<pcl::PointXYZI>::Ptr
 
     // Stage 3
     bool ransac_success = false;
-    if (do_floor) {
+    if (local_cfg.filter_floor) {
         pcl::PointCloud<pcl::PointXYZI>::Ptr ground_seeds(new pcl::PointCloud<pcl::PointXYZI>);
         for (const auto& pt : tmp_voxel->points) {
             if (pt.x > 0.1 && pt.x < 8.0 && std::abs(pt.y) < 2.5) {
@@ -438,18 +351,18 @@ void LidarFilterCore::pointcloud_filter_pcl(pcl::PointCloud<pcl::PointXYZI>::Ptr
             pcl::PassThrough<pcl::PointXYZI> pass_floor;
             pass_floor.setInputCloud(tmp_voxel);
             pass_floor.setFilterFieldName("z");
-            pass_floor.setFilterLimits(z_min, -1.80); 
+            pass_floor.setFilterLimits(local_cfg.height_min, -1.80); 
             pass_floor.setFilterLimitsNegative(true); 
             pass_floor.filter(*tmp_nonground);
         }
     }
 
     // Stage 4
-    if (do_radius_filter && !tmp_nonground->empty()) {
+    if (local_cfg.radius_enble && !tmp_nonground->empty()) {
         pcl::RadiusOutlierRemoval<pcl::PointXYZI> outrem;
         outrem.setInputCloud(tmp_nonground);
-        outrem.setRadiusSearch(local_radius_radius);
-        outrem.setMinNeighborsInRadius(local_radius_neighbors);
+        outrem.setRadiusSearch(local_cfg.radius_radius);
+        outrem.setMinNeighborsInRadius(local_cfg.radius_min_neighbors);
         outrem.filter(*tmp_nonground);
     }
 
@@ -458,18 +371,11 @@ void LidarFilterCore::pointcloud_filter_pcl(pcl::PointCloud<pcl::PointXYZI>::Ptr
 
 void LidarFilterCore::filterChargingStation(pcl::PointCloud<pcl::PointXYZI>::Ptr cloud_ptr)
 {
-    bool do_charge;
-    {
-        std::lock_guard<std::mutex> lock(core_param_mutex_);
-        do_charge = charge_enble_;
-    }
-
-    if (!do_charge || fliter_charge_ == 0 || cloud_ptr->empty()) return;
+    if (!charge_enble_ || fliter_charge_ == 0 || cloud_ptr->empty()) return;
 
     updateChargeCache(transPose_);
     size_t write_index = 0;
     
-    // #pragma omp parallel for
     for (size_t i = 0; i < cloud_ptr->size(); ++i) {
         if (!isPointInChargeArea(cloud_ptr->points[i])) {
             cloud_ptr->points[write_index++] = cloud_ptr->points[i];
@@ -482,12 +388,10 @@ void LidarFilterCore::filterChargingStation(pcl::PointCloud<pcl::PointXYZI>::Ptr
 }
 
 void LidarFilterCore::updateChargeCache(const geometry_msgs::Pose& pose) {
-    double length, wide, high;
+    NativeFilterConfig local_cfg;
     {
         std::lock_guard<std::mutex> lock(core_param_mutex_);
-        length = charge_length_;
-        wide = charge_wide_;
-        high = charge_high_;
+        local_cfg = config_;
     }
 
     std::lock_guard<std::mutex> lock(charge_cache_mutex_);
@@ -495,10 +399,10 @@ void LidarFilterCore::updateChargeCache(const geometry_msgs::Pose& pose) {
     double yaw = tf2::getYaw(pose.orientation);
     charge_cache_.cos_theta = std::cos(yaw);
     charge_cache_.sin_theta = std::sin(yaw);
-    charge_cache_.half_length = length / 2.0;
-    charge_cache_.half_width = wide / 2.0;
+    charge_cache_.half_length = local_cfg.charge_length / 2.0;
+    charge_cache_.half_width = local_cfg.charge_wide / 2.0;
     charge_cache_.z_min = pose.position.z; 
-    charge_cache_.z_max = pose.position.z + high;
+    charge_cache_.z_max = pose.position.z + local_cfg.charge_high;
     charge_cache_.valid = true;
 }
 
@@ -544,13 +448,12 @@ void LidarFilterCore::filterVehicleBody(pcl::PointCloud<pcl::PointXYZI>::Ptr in_
     double local_v_height;
     {
         std::lock_guard<std::mutex> lock(core_param_mutex_);
-        local_v_height = vehicle_height_;
+        local_v_height = config_.vehicle_height;
     }
 
     out_cloud_ptr->clear();
     out_cloud_ptr->reserve(in_cloud_ptr->size());
 
-    // 【修改点】复用类成员缓存池，消灭局部动态分配
     int num_threads = omp_get_max_threads();
     for (int i = 0; i < num_threads; ++i) {
         omp_buffers_vehicle_[i].clear();
@@ -598,7 +501,7 @@ visualization_msgs::Marker LidarFilterCore::pubVehicleModel(const std::vector<ge
     double local_v_height;
     {
         std::lock_guard<std::mutex> lock(core_param_mutex_);
-        local_v_height = vehicle_height_;
+        local_v_height = config_.vehicle_height;
     }
     visualization_msgs::Marker marker; marker.header.frame_id = "velodyne"; marker.header.stamp = ros::Time::now();
     marker.ns = "vehicle_model"; marker.id = 0; marker.type = visualization_msgs::Marker::LINE_LIST;
@@ -621,47 +524,30 @@ visualization_msgs::Marker LidarFilterCore::pubVehicleModel(const std::vector<ge
 void LidarFilterCore::displayPolygonInRviz(ros::Publisher& publisher, const geometry_msgs::Pose& pose_, float scale_x, float scale_y, float scale_z) {
     visualization_msgs::Marker m; 
     m.header.frame_id = "map"; 
-    m.type = visualization_msgs::Marker::LINE_LIST; // 改用 LINE_LIST 绘制 3D 独立线段
+    m.type = visualization_msgs::Marker::LINE_LIST;
     m.id = 0; 
-    m.scale.x = 0.05; // 线条粗细
+    m.scale.x = 0.05; 
     m.color.a = 1.0; 
-    m.color.r = 1.0;  // 红色框
+    m.color.r = 1.0;  
 
-    // 当未找到充电桩或者长宽为0时，删除对应的 Marker，而不是画一个没有体积的点
     if (scale_x <= 0.001 || scale_y <= 0.001) {
         m.action = visualization_msgs::Marker::DELETE;
     } else {
         m.action = visualization_msgs::Marker::ADD;
-        
-        // 获取底面的四个顶点
         std::vector<geometry_msgs::Point> bottom_v = getRectangleVertices(pose_, scale_x, scale_y);
-        
         if(!bottom_v.empty()) { 
-            // 通过加上高度 (scale_z) 来生成顶面的四个顶点
             std::vector<geometry_msgs::Point> top_v = bottom_v;
             for (auto& p : top_v) {
                 p.z += scale_z;
             }
-
-            // 组装 3D 线框的 12 条边 (底面4条 + 顶面4条 + 侧面4条)
             for (size_t i = 0; i < 4; ++i) {
                 size_t next = (i + 1) % 4;
-                
-                // 1. 底面的四条边
-                m.points.push_back(bottom_v[i]);
-                m.points.push_back(bottom_v[next]);
-                
-                // 2. 顶面的四条边
-                m.points.push_back(top_v[i]);
-                m.points.push_back(top_v[next]);
-                
-                // 3. 连接底面和顶面的四条垂直高度线
-                m.points.push_back(bottom_v[i]);
-                m.points.push_back(top_v[i]);
+                m.points.push_back(bottom_v[i]); m.points.push_back(bottom_v[next]);
+                m.points.push_back(top_v[i]); m.points.push_back(top_v[next]);
+                m.points.push_back(bottom_v[i]); m.points.push_back(top_v[i]);
             }
         }
     }
-    
     visualization_msgs::MarkerArray ma; 
     ma.markers.push_back(m); 
     publisher.publish(ma);
@@ -675,10 +561,7 @@ void LidarFilterCore::keyPointCallback(const autoware_msgs::KeyPointArrayConstPt
     double error, len, wide, high;
     {
         std::lock_guard<std::mutex> lock(core_param_mutex_);
-        error = charge_error_;
-        len = charge_length_;
-        wide = charge_wide_;
-        high = charge_high_;
+        error = config_.charge_error; len = config_.charge_length; wide = config_.charge_wide; high = config_.charge_high;
     }
     fliterpose_.clear(); bool found = false;
     if(!msg->path.empty()) {
@@ -693,7 +576,6 @@ void LidarFilterCore::keyPointCallback(const autoware_msgs::KeyPointArrayConstPt
                     fliterpose_.push_back(p); 
                     displayPolygonInRviz(marker_pub_, p, len, wide, high); 
                     found = true;
-                    ROS_INFO("Found charge point: %s", type.data.c_str());
                 }
             }
         }
@@ -701,15 +583,9 @@ void LidarFilterCore::keyPointCallback(const autoware_msgs::KeyPointArrayConstPt
     if(!found) { geometry_msgs::Pose e; displayPolygonInRviz(marker_pub_, e, 0, 0, 0); }
 }
 
-
 void LidarFilterCore::ctrolCallback(const std_msgs::Int8ConstPtr &msg) {
-    bool do_charge;
-    {
-        std::lock_guard<std::mutex> lock(core_param_mutex_);
-        do_charge = charge_enble_;
-    }
-    if(do_charge && msg->data == 2) fliter_charge_ = 1; 
-    else if(do_charge && msg->data < 0) fliter_charge_ = 2; 
+    if(charge_enble_ && msg->data == 2) fliter_charge_ = 1; 
+    else if(charge_enble_ && msg->data < 0) fliter_charge_ = 2; 
     else fliter_charge_ = 0;
     
     if(fabs(msg->data) == 4) enbleElevator_ = true; else enbleElevator_ = false;
