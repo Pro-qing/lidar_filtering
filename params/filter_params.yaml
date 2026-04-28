@@ -2,110 +2,278 @@
 # 点云过滤与控制参数配置
 # ==========================================
 
+# 四雷达独立使能开关
+lidar_enable:
+  main: true
+  top: true
+  left: true
+  right: true
+
 # 雷达区域过滤控制 (控制各雷达保留的有效扫描角度与距离)
 regions:
-  main:  
-    enable: 0        # 是否开启对主雷达(3D)的角度/距离过滤。0代表关闭，全盘接收
-    min_angle: 0.0   # 备用：有效起始角度
-    max_angle: 360.0 # 备用：有效结束角度
-    max_dis: 0.0     # 最大截断距离
-    a: 0.0           # 区间1起始角度 (0-360)
-    b: 360.0         # 区间1结束角度
-    c: 0.0           # 区间2起始角度 (用于双区间保留，如绕过某个支柱)
-    d: 360.0         # 区间2结束角度
-  top:   { enable: 1, min_angle: 0.0, max_angle: 360.0, max_dis: 0.0, a: 0.0, b: 360.0, c: 0.0, d: 360.0 }
-  
-  # 合并的 left/right 设置
-  left:  
-    enable: 1        # 开启左侧单线雷达过滤
-    max_dis: 1.5     # 超过 1.5 米的点直接丢弃
-    a: 0.0           # 左侧雷达仅保留 0度 ~ 180度 的点（通常是朝向车外的半圆）
-    b: 180.0         
-    c: 0.0           # 区间2不用的话可以设为 0
-    d: 0.0           
-  right: 
-    enable: 1        
-    max_dis: 1.50    # [修正] 右侧雷达保留 15米 以内
-    a: 180.0         # 右侧雷达保留 180度 ~ 360度
+  main:
+    enable: 0
+    min_angle: 0.0
+    max_angle: 360.0
+    max_dis: 0.0
+    a: 0.0
     b: 360.0
+    c: 0.0
+    d: 360.0
+
+  top:
+    enable: 1
+    min_angle: 0.0
+    max_angle: 360.0
+    max_dis: 0.0
+    a: 0.0
+    b: 360.0
+    c: 0.0
+    d: 360.0
+
+  left:
+    enable: 1
+    max_dis: 1.5
+    a: 0.0
+    b: 180.0
+    c: 0.0
+    d: 0.0
+
+  right:
+    enable: 1
+    max_dis: 1.5
+    a: 180.0
+    b: 360.0
+    c: 0.0
+    d: 0.0
 
 # 速度动态限制过滤 (当车辆降速时，收缩扫描边界，防止低速误触发避障)
 speed_limits:
-  maxSpeed: 1.2             # 触发限速模式的最高速度。如果 CAN_info.speed < 1.2，则启动动态收缩
-  maxLimitDis_speed: 0.5    # 在限速模式下，将处于下方限制角度内的点云，强制截断到 0.5米
-  leftLimit_min_angle: 190.0 # 左侧雷达需要被强行收缩的起始角度
-  leftLimit_max_angle: 90.0  # 左侧雷达需要被强行收缩的结束角度 (90度)
-  rightLimit_min_angle: 250.0 
+  maxSpeed: 1.2
+  maxLimitDis_speed: 0.5
+  leftLimit_min_angle: 190.0
+  leftLimit_max_angle: 90.0
+  rightLimit_min_angle: 250.0
   rightLimit_max_angle: 170.0
 
 # 核心滤波参数 (点云降采样与空间剪裁)
 core:
-  crop_radius: 8.0          # XY平面的最大保留半径。距离雷达 >8米 的点会被裁剪掉
-  crop_radius_x: 5.0        # X轴方向的裁剪圆心偏移。圆心从(0,0)偏移到(5,0)，用于拉长车前方的视距
-  height_max: 0.0           # Z轴最高保留高度 (高于0.0米的点丢弃，防止车顶上方的树叶/房顶干扰)
-  height_min: -1.85         # Z轴最低保留高度 (低于 -1.85米的视为地下噪点丢弃)
-  height_filt: -5.0         # (用于备选地面过滤方案) 起始过滤高度
-  filter_floor: true        # 是否开启地面剔除(RANSAC或高度阈值剔除)
-  voxel_filter: 0.1         # VoxelGrid 体素滤波的叶子大小 (0.1米，即10cm内的点合并为一个，极大降低数据量)
-  voxel_filter_auto: false  # 是否自动调节体素大小 (预留)
-  voxel_filter_eleva: 0.1   # 电梯模式/特殊模式下的体素大小
-  filter_transient: true    # 是否过滤瞬态噪点 (幽灵点)
-  neighboring_points: 10    # 局部特征相邻点数
-  stand_threshold: 0.8      # 判定柱状物的阈值
-  time_consistency_filter: true # 时间一致性过滤 (开启后会对前后帧对比，去除雨雪/灰尘)
-  radius_enble: true        # 开启半径离群点滤波 (Radius Outlier Removal)
-  radius_radius: 0.15       # 搜索半径 0.15米
-  radius_min_neighbors: 2   # 半径内少于 2 个邻居的点视为噪点剔除
+  crop_radius: 8.0
+  crop_radius_x: 5.0
+  height_max: 0.0
+  height_min: -1.85
+  height_filt: -5.0
+  filter_floor: true
+  voxel_filter: 0.1
+  voxel_filter_auto: false
+  voxel_filter_eleva: 0.1
+  filter_transient: true
+  neighboring_points: 10
+  stand_threshold: 0.8
+  time_consistency_filter: true
+  radius_enble: true
+  radius_radius: 0.15
+  radius_min_neighbors: 2
+  charge_enble: true
+  charge_length: 1.2
+  charge_wide: 1.2
+  charge_high: 1.2
+  charge_error: 1.2
+  consistency_enable: false
+  consistency_min_angle: -20.0
+  consistency_max_angle: 20.0
+  consistency_diff_dist: 0.5
+  vehicle_height: 1.0
 
-# 双雷达一致性校验 (解决两颗单线雷达在车前/车后视野重叠区的伪影)
+# 兼容字段: 双雷达一致性校验
 consistency:
-  enable: false              # 开启校验
-  min_angle: -20.0          # 在车头正前方 -20 度到
-  max_angle: 20.0           # 20 度区域内进行校验
-  diff_dist: 0.5            # 左右雷达在这个角度下，测距相差 > 0.5米，则剔除较近/较远的干扰点
+  enable: false
+  min_angle: -20.0
+  max_angle: 20.0
+  diff_dist: 0.5
 
-# 充电桩识别参数 (防止将充电桩误认为障碍物)
+# 兼容字段: 充电桩识别参数
 charge:
-  enble: true               # 开启充电桩保护区
-  length: 1.2               # 充电桩区域长 1.2 米
-  wide: 1.2                 # 充电桩区域宽 1.2 米
-  high: 1.2                 # 充电桩区域高 1.2 米
-  error: 1.2                # 接收到 LQR 导航坐标时的容差偏移量
-
+  enble: true
+  length: 1.2
+  wide: 1.2
+  high: 1.2
+  error: 1.2
 
 
 # ==========================================
 # 场景化动态参数覆写 (Behavior Overrides)
+# 每个行为均给出完整参数集，便于独立维护
 # ==========================================
-# 只有在这里声明的参数，才会在对应的行为 ID 下覆盖基础配置。
 behaviors:
-  # Behavior 4: 模式4
+  # Behavior 4: 电梯/特殊狭窄模式
   4:
-    enable_single_lidar: false   # 关闭左右单线雷达
+    enable_single_lidar: false
+    lidar_enable:
+      main: true
+      top: true
+      left: false
+      right: false
+    regions:
+      main: { enable: 0, min_angle: 0.0, max_angle: 360.0, max_dis: 0.0, a: 0.0, b: 360.0, c: 0.0, d: 360.0 }
+      top: { enable: 1, min_angle: 0.0, max_angle: 360.0, max_dis: 0.0, a: 0.0, b: 360.0, c: 0.0, d: 360.0 }
+      left: { enable: 1, max_dis: 1.5, a: 0.0, b: 180.0, c: 0.0, d: 0.0 }
+      right: { enable: 1, max_dis: 1.5, a: 180.0, b: 360.0, c: 0.0, d: 0.0 }
     core:
-      crop_radius: 4.0           # 缩小感知半径
-      filter_transient: false    # 关闭瞬态过滤
-      filter_floor: false        # 关闭地面过滤
-  
-  # Behavior 2: 模式2
+      crop_radius: 4.0
+      crop_radius_x: 5.0
+      height_max: 0.0
+      height_min: -1.85
+      height_filt: -5.0
+      filter_floor: false
+      voxel_filter: 0.1
+      voxel_filter_auto: false
+      voxel_filter_eleva: 0.1
+      filter_transient: false
+      neighboring_points: 10
+      stand_threshold: 0.8
+      time_consistency_filter: true
+      radius_enble: true
+      radius_radius: 0.15
+      radius_min_neighbors: 2
+      charge_enble: true
+      charge_length: 1.2
+      charge_wide: 1.2
+      charge_high: 1.2
+      charge_error: 1.2
+      consistency_enable: false
+      consistency_min_angle: -20.0
+      consistency_max_angle: 20.0
+      consistency_diff_dist: 0.5
+      vehicle_height: 1.0
+    consistency: { enable: false, min_angle: -20.0, max_angle: 20.0, diff_dist: 0.5 }
+    charge: { enble: true, length: 1.2, wide: 1.2, high: 1.2, error: 1.2 }
+
+  # Behavior 2: 充电相关模式
   2:
     enable_single_lidar: true
+    lidar_enable:
+      main: true
+      top: true
+      left: true
+      right: true
+    regions:
+      main: { enable: 0, min_angle: 0.0, max_angle: 360.0, max_dis: 0.0, a: 0.0, b: 360.0, c: 0.0, d: 360.0 }
+      top: { enable: 1, min_angle: 0.0, max_angle: 360.0, max_dis: 0.0, a: 0.0, b: 360.0, c: 0.0, d: 360.0 }
+      left: { enable: 1, max_dis: 1.5, a: 0.0, b: 180.0, c: 0.0, d: 0.0 }
+      right: { enable: 1, max_dis: 1.5, a: 180.0, b: 360.0, c: 0.0, d: 0.0 }
     core:
-      charge_enble: true         # 强制开启充电保护区
       crop_radius: 6.0
-      consistency_enable: true   # 开启一致性校验去噪
-  
-  # Behavior 5: 模式5
+      crop_radius_x: 5.0
+      height_max: 0.0
+      height_min: -1.85
+      height_filt: -5.0
+      filter_floor: true
+      voxel_filter: 0.1
+      voxel_filter_auto: false
+      voxel_filter_eleva: 0.1
+      filter_transient: true
+      neighboring_points: 10
+      stand_threshold: 0.8
+      time_consistency_filter: true
+      radius_enble: true
+      radius_radius: 0.15
+      radius_min_neighbors: 2
+      charge_enble: true
+      charge_length: 1.2
+      charge_wide: 1.2
+      charge_high: 1.2
+      charge_error: 1.2
+      consistency_enable: true
+      consistency_min_angle: -20.0
+      consistency_max_angle: 20.0
+      consistency_diff_dist: 0.5
+      vehicle_height: 1.0
+    consistency: { enable: true, min_angle: -20.0, max_angle: 20.0, diff_dist: 0.5 }
+    charge: { enble: true, length: 1.2, wide: 1.2, high: 1.2, error: 1.2 }
+
+  # Behavior 5: 近距离防撞收缩模式
   5:
     enable_single_lidar: true
-    core:
-      crop_radius_x: 3.0
+    lidar_enable:
+      main: true
+      top: true
+      left: true
+      right: true
     regions:
-      left:  { max_dis: 1.0 }    # 左侧防撞距离缩短
-      right: { max_dis: 1.0 }    # 右侧防撞距离缩短
+      main: { enable: 0, min_angle: 0.0, max_angle: 360.0, max_dis: 0.0, a: 0.0, b: 360.0, c: 0.0, d: 360.0 }
+      top: { enable: 1, min_angle: 0.0, max_angle: 360.0, max_dis: 0.0, a: 0.0, b: 360.0, c: 0.0, d: 360.0 }
+      left: { enable: 1, max_dis: 1.0, a: 0.0, b: 180.0, c: 0.0, d: 0.0 }
+      right: { enable: 1, max_dis: 1.0, a: 180.0, b: 360.0, c: 0.0, d: 0.0 }
+    core:
+      crop_radius: 8.0
+      crop_radius_x: 3.0
+      height_max: 0.0
+      height_min: -1.85
+      height_filt: -5.0
+      filter_floor: true
+      voxel_filter: 0.1
+      voxel_filter_auto: false
+      voxel_filter_eleva: 0.1
+      filter_transient: true
+      neighboring_points: 10
+      stand_threshold: 0.8
+      time_consistency_filter: true
+      radius_enble: true
+      radius_radius: 0.15
+      radius_min_neighbors: 2
+      charge_enble: true
+      charge_length: 1.2
+      charge_wide: 1.2
+      charge_high: 1.2
+      charge_error: 1.2
+      consistency_enable: false
+      consistency_min_angle: -20.0
+      consistency_max_angle: 20.0
+      consistency_diff_dist: 0.5
+      vehicle_height: 1.0
+    consistency: { enable: false, min_angle: -20.0, max_angle: 20.0, diff_dist: 0.5 }
+    charge: { enble: true, length: 1.2, wide: 1.2, high: 1.2, error: 1.2 }
 
-  # Behavior 6: 模式6
+  # Behavior 6: 行人残影抑制模式
   6:
     enable_single_lidar: true
+    lidar_enable:
+      main: true
+      top: true
+      left: true
+      right: true
+    regions:
+      main: { enable: 0, min_angle: 0.0, max_angle: 360.0, max_dis: 0.0, a: 0.0, b: 360.0, c: 0.0, d: 360.0 }
+      top: { enable: 1, min_angle: 0.0, max_angle: 360.0, max_dis: 0.0, a: 0.0, b: 360.0, c: 0.0, d: 360.0 }
+      left: { enable: 1, max_dis: 1.5, a: 0.0, b: 180.0, c: 0.0, d: 0.0 }
+      right: { enable: 1, max_dis: 1.5, a: 180.0, b: 360.0, c: 0.0, d: 0.0 }
     core:
-      filter_transient: true     # 必须开启瞬态过滤去行人残影
+      crop_radius: 8.0
+      crop_radius_x: 5.0
+      height_max: 0.0
+      height_min: -1.85
+      height_filt: -5.0
+      filter_floor: true
+      voxel_filter: 0.1
+      voxel_filter_auto: false
+      voxel_filter_eleva: 0.1
+      filter_transient: true
+      neighboring_points: 10
+      stand_threshold: 0.8
+      time_consistency_filter: true
+      radius_enble: true
+      radius_radius: 0.15
+      radius_min_neighbors: 2
+      charge_enble: true
+      charge_length: 1.2
+      charge_wide: 1.2
+      charge_high: 1.2
+      charge_error: 1.2
+      consistency_enable: false
+      consistency_min_angle: -20.0
+      consistency_max_angle: 20.0
+      consistency_diff_dist: 0.5
+      vehicle_height: 1.0
+    consistency: { enable: false, min_angle: -20.0, max_angle: 20.0, diff_dist: 0.5 }
+    charge: { enble: true, length: 1.2, wide: 1.2, high: 1.2, error: 1.2 }

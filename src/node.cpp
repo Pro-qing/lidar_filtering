@@ -55,6 +55,7 @@ ros::Publisher pub_16_filter_, pub_mid_filter_, pub_left_filter_, pub_right_filt
 ros::Publisher pub_16_calib_, pub_mid_calib_, pub_left_calib_, pub_right_calib_;
 ros::Publisher pub_car_marker_, pub_debug_origins_;
 ros::Publisher pub_charge_polygon_marker_;
+ros::Publisher pub_left_ang_, pub_right_ang_;
 
 // 父坐标系名称（通常是 "base_link" 或 "velodyne"）
 std::string parent_frame_;
@@ -127,7 +128,7 @@ struct CalibrationParams {
 struct FilterParams { 
     int enable = 1;                 
     double min_angle = 0, max_angle = 360, max_dis = 100; 
-    double a = 0, b = 360, c = 0, d = 360; 
+    double a = 0, b = 360, c = 0, d = 0; 
 };
 
 // 全局互斥锁，用于保护标定参数的线程安全访问
@@ -143,6 +144,10 @@ CalibrationParams p_main, p_mid, p_left, p_right;
 struct FilterProfile {
     NativeFilterConfig core;
     FilterParams f_main, f_mid, f_left, f_right;
+    bool enable_main_lidar = true;
+    bool enable_top_lidar = true;
+    bool enable_left_lidar = true;
+    bool enable_right_lidar = true;
     bool enable_single_lidar = true; // 默认开启左右单线雷达
 };
 
@@ -253,6 +258,14 @@ void reloadFilterParamsYaml(const std::string& filepath) {
             parseRegion("right", profile.f_right);
         };
 
+        // --- Lambda: 解析雷达使能开关 ---
+        auto parseLidarEnable = [](const YAML::Node& node, FilterProfile& profile) {
+            if (node["main"]) profile.enable_main_lidar = node["main"].as<bool>(profile.enable_main_lidar);
+            if (node["top"]) profile.enable_top_lidar = node["top"].as<bool>(profile.enable_top_lidar);
+            if (node["left"]) profile.enable_left_lidar = node["left"].as<bool>(profile.enable_left_lidar);
+            if (node["right"]) profile.enable_right_lidar = node["right"].as<bool>(profile.enable_right_lidar);
+        };
+
         // --- Lambda: 解析核心Core参数 ---
         auto parseCore = [](const YAML::Node& cr, NativeFilterConfig& cfg) {
             if (cr["crop_radius"]) cfg.crop_radius = cr["crop_radius"].as<double>(cfg.crop_radius);
@@ -262,6 +275,7 @@ void reloadFilterParamsYaml(const std::string& filepath) {
             if (cr["height_filt"]) cfg.height_filt = cr["height_filt"].as<double>(cfg.height_filt);
             if (cr["filter_floor"]) cfg.filter_floor = cr["filter_floor"].as<bool>(cfg.filter_floor);
             if (cr["voxel_filter"]) cfg.voxel_filter = cr["voxel_filter"].as<double>(cfg.voxel_filter);
+            if (cr["voxel_filter_auto"]) cfg.voxel_filter_auto = cr["voxel_filter_auto"].as<bool>(cfg.voxel_filter_auto);
             if (cr["voxel_filter_eleva"]) cfg.voxel_filter_eleva = cr["voxel_filter_eleva"].as<double>(cfg.voxel_filter_eleva);
             if (cr["filter_transient"]) cfg.filter_transient = cr["filter_transient"].as<bool>(cfg.filter_transient);
             if (cr["radius_enble"]) cfg.radius_enble = cr["radius_enble"].as<bool>(cfg.radius_enble);
@@ -271,7 +285,30 @@ void reloadFilterParamsYaml(const std::string& filepath) {
             if (cr["stand_threshold"]) cfg.stand_threshold = cr["stand_threshold"].as<double>(cfg.stand_threshold);
             if (cr["time_consistency_filter"]) cfg.time_consistency_filter = cr["time_consistency_filter"].as<bool>(cfg.time_consistency_filter);
             if (cr["charge_enble"]) cfg.charge_enble = cr["charge_enble"].as<bool>(cfg.charge_enble);
+            if (cr["charge_length"]) cfg.charge_length = cr["charge_length"].as<double>(cfg.charge_length);
+            if (cr["charge_wide"]) cfg.charge_wide = cr["charge_wide"].as<double>(cfg.charge_wide);
+            if (cr["charge_high"]) cfg.charge_high = cr["charge_high"].as<double>(cfg.charge_high);
+            if (cr["charge_error"]) cfg.charge_error = cr["charge_error"].as<double>(cfg.charge_error);
             if (cr["consistency_enable"]) cfg.consistency_enable = cr["consistency_enable"].as<bool>(cfg.consistency_enable);
+            if (cr["consistency_min_angle"]) cfg.consistency_min_angle = cr["consistency_min_angle"].as<double>(cfg.consistency_min_angle);
+            if (cr["consistency_max_angle"]) cfg.consistency_max_angle = cr["consistency_max_angle"].as<double>(cfg.consistency_max_angle);
+            if (cr["consistency_diff_dist"]) cfg.consistency_diff_dist = cr["consistency_diff_dist"].as<double>(cfg.consistency_diff_dist);
+            if (cr["vehicle_height"]) cfg.vehicle_height = cr["vehicle_height"].as<double>(cfg.vehicle_height);
+        };
+
+        auto parseConsistency = [](const YAML::Node& cs, NativeFilterConfig& cfg) {
+            if(cs["enable"]) cfg.consistency_enable = cs["enable"].as<bool>(cfg.consistency_enable);
+            if(cs["min_angle"]) cfg.consistency_min_angle = cs["min_angle"].as<double>(cfg.consistency_min_angle);
+            if(cs["max_angle"]) cfg.consistency_max_angle = cs["max_angle"].as<double>(cfg.consistency_max_angle);
+            if(cs["diff_dist"]) cfg.consistency_diff_dist = cs["diff_dist"].as<double>(cfg.consistency_diff_dist);
+        };
+
+        auto parseCharge = [](const YAML::Node& cg, NativeFilterConfig& cfg) {
+            if(cg["enble"]) cfg.charge_enble = cg["enble"].as<bool>(cfg.charge_enble);
+            if(cg["length"]) cfg.charge_length = cg["length"].as<double>(cfg.charge_length);
+            if(cg["wide"]) cfg.charge_wide = cg["wide"].as<double>(cfg.charge_wide);
+            if(cg["high"]) cfg.charge_high = cg["high"].as<double>(cfg.charge_high);
+            if(cg["error"]) cfg.charge_error = cg["error"].as<double>(cfg.charge_error);
         };
 
         // 1. 读取全局速度限制参数
@@ -287,25 +324,13 @@ void reloadFilterParamsYaml(const std::string& filepath) {
 
         // 2. 解析基础配置 (Base Profile)
         FilterProfile temp_base = base_profile_; 
+        if (yaml["lidar_enable"]) parseLidarEnable(yaml["lidar_enable"], temp_base);
         if (yaml["regions"]) parseRegions(yaml["regions"], temp_base);
         if (yaml["core"]) parseCore(yaml["core"], temp_base.core);
         
         // 兼容原有的独立层级 consistency 和 charge
-        if (yaml["consistency"]) {
-            auto cs = yaml["consistency"];
-            if(cs["enable"]) temp_base.core.consistency_enable = cs["enable"].as<bool>(temp_base.core.consistency_enable);
-            if(cs["min_angle"]) temp_base.core.consistency_min_angle = cs["min_angle"].as<double>(temp_base.core.consistency_min_angle);
-            if(cs["max_angle"]) temp_base.core.consistency_max_angle = cs["max_angle"].as<double>(temp_base.core.consistency_max_angle);
-            if(cs["diff_dist"]) temp_base.core.consistency_diff_dist = cs["diff_dist"].as<double>(temp_base.core.consistency_diff_dist);
-        }
-        if (yaml["charge"]) {
-            auto cg = yaml["charge"];
-            if(cg["enble"]) temp_base.core.charge_enble = cg["enble"].as<bool>(temp_base.core.charge_enble);
-            if(cg["length"]) temp_base.core.charge_length = cg["length"].as<double>(temp_base.core.charge_length);
-            if(cg["wide"]) temp_base.core.charge_wide = cg["wide"].as<double>(temp_base.core.charge_wide);
-            if(cg["high"]) temp_base.core.charge_high = cg["high"].as<double>(temp_base.core.charge_high);
-            if(cg["error"]) temp_base.core.charge_error = cg["error"].as<double>(temp_base.core.charge_error);
-        }
+        if (yaml["consistency"]) parseConsistency(yaml["consistency"], temp_base.core);
+        if (yaml["charge"]) parseCharge(yaml["charge"], temp_base.core);
 
         // 3. 解析行为覆写字典 (Behaviors Overrides)
         std::map<int, FilterProfile> temp_profiles;
@@ -319,8 +344,11 @@ void reloadFilterParamsYaml(const std::string& filepath) {
 
                 // 覆盖解析
                 if (overrides["enable_single_lidar"]) profile.enable_single_lidar = overrides["enable_single_lidar"].as<bool>();
+                if (overrides["lidar_enable"]) parseLidarEnable(overrides["lidar_enable"], profile);
                 if (overrides["regions"]) parseRegions(overrides["regions"], profile);
                 if (overrides["core"]) parseCore(overrides["core"], profile.core);
+                if (overrides["consistency"]) parseConsistency(overrides["consistency"], profile.core);
+                if (overrides["charge"]) parseCharge(overrides["charge"], profile.core);
 
                 temp_profiles[behavior_id] = profile;
             }
@@ -517,9 +545,9 @@ void projectScanToCloud(sensor_msgs::LaserScan& scan_in,
                         const FilterParams& filter, 
                         pcl::PointCloud<pcl::PointXYZI>::Ptr& output_cloud) 
 {
-    if (!filter.enable) return;
-
-    filter_core_ptr_->filterScanMsg(scan_in, filter.a, filter.b, filter.max_dis, false, 0, 0);
+    if (filter.enable) {
+        filter_core_ptr_->filterScanMsgDualInterval(scan_in, filter.a, filter.b, filter.c, filter.d, filter.max_dis, false, 0, 0, 0.0);
+    }
 
     sensor_msgs::PointCloud2 cloud_msg;
     try {
@@ -533,6 +561,27 @@ void projectScanToCloud(sensor_msgs::LaserScan& scan_in,
         pcl::fromROSMsg(cloud_msg, tmp_pcl);
         pcl::transformPointCloud(tmp_pcl, tmp_pcl, calib.getMatrix());
         *output_cloud += tmp_pcl; 
+    }
+}
+
+void projectScanToCalibCloud(const sensor_msgs::LaserScan& scan_in,
+                             const CalibrationParams& calib,
+                             pcl::PointCloud<pcl::PointXYZI>::Ptr& output_cloud)
+{
+    output_cloud->clear();
+
+    sensor_msgs::PointCloud2 cloud_msg;
+    try {
+        projector_.projectLaser(scan_in, cloud_msg);
+    } catch (...) {
+        return;
+    }
+
+    if (cloud_msg.width > 0) {
+        pcl::PointCloud<pcl::PointXYZI> tmp_pcl;
+        pcl::fromROSMsg(cloud_msg, tmp_pcl);
+        pcl::transformPointCloud(tmp_pcl, tmp_pcl, calib.getMatrix());
+        *output_cloud += tmp_pcl;
     }
 }
 
@@ -645,19 +694,73 @@ void callback(const sensor_msgs::PointCloud2::ConstPtr &msg_16,
         active_profile = current_profile_;
     }
 
-    // 3. 处理 3D 雷达 (使用 active_profile 中的过滤参数)
-    processCloud(msg_16, local_p_main, active_profile.f_main, buf_main, false);
-    processCloud(msg_mid, local_p_mid, active_profile.f_mid, buf_mid, true);
+    auto clear_buffer = [](LidarBuffers& buf) {
+        buf.calib->clear();
+        buf.filt->clear();
+        buf.raw_count = 0;
+    };
 
-    // 4. 处理单线雷达 (先行合并)
+    auto publish_cloud = [&](ros::Publisher& pub, const pcl::PointCloud<pcl::PointXYZI>::Ptr& cloud) {
+        if (pub.getNumSubscribers() > 0 && !cloud->empty()) {
+            sensor_msgs::PointCloud2 m;
+            pcl::toROSMsg(*cloud, m);
+            m.header = msg_16->header;
+            m.header.frame_id = parent_frame_;
+            pub.publish(m);
+        }
+    };
+
+    const bool enable_main = active_profile.enable_main_lidar;
+    const bool enable_top = active_profile.enable_top_lidar;
+    const bool enable_left = active_profile.enable_left_lidar;
+    const bool enable_right = active_profile.enable_right_lidar;
+    const bool use_left_for_single = active_profile.enable_single_lidar && enable_left;
+    const bool use_right_for_single = active_profile.enable_single_lidar && enable_right;
+
+    // 3. 处理 3D 雷达 (使用 active_profile 中的过滤参数)
+    if (enable_main) processCloud(msg_16, local_p_main, active_profile.f_main, buf_main, false);
+    else clear_buffer(buf_main);
+    if (enable_top) processCloud(msg_mid, local_p_mid, active_profile.f_mid, buf_mid, true);
+    else clear_buffer(buf_mid);
+
+    publish_cloud(pub_16_calib_, buf_main.calib);
+    publish_cloud(pub_mid_calib_, buf_mid.calib);
+
+    // 4. 处理单线雷达：双区间裁剪 -> 投影点云发布 -> 再进入后续链路
     static pcl::PointCloud<pcl::PointXYZI>::Ptr combined_2d_raw(new pcl::PointCloud<pcl::PointXYZI>());
+    static pcl::PointCloud<pcl::PointXYZI>::Ptr left_ang_cloud(new pcl::PointCloud<pcl::PointXYZI>());
+    static pcl::PointCloud<pcl::PointXYZI>::Ptr right_ang_cloud(new pcl::PointCloud<pcl::PointXYZI>());
+    static pcl::PointCloud<pcl::PointXYZI>::Ptr left_calib_cloud(new pcl::PointCloud<pcl::PointXYZI>());
+    static pcl::PointCloud<pcl::PointXYZI>::Ptr right_calib_cloud(new pcl::PointCloud<pcl::PointXYZI>());
     combined_2d_raw->clear();
+    left_ang_cloud->clear();
+    right_ang_cloud->clear();
+    left_calib_cloud->clear();
+    right_calib_cloud->clear();
 
     sensor_msgs::LaserScan scan_left_copy = *msg_left;
     sensor_msgs::LaserScan scan_right_copy = *msg_right;
 
-    projectScanToCloud(scan_left_copy, local_p_left, active_profile.f_left, combined_2d_raw);
-    projectScanToCloud(scan_right_copy, local_p_right, active_profile.f_right, combined_2d_raw);
+    if (enable_left) {
+        projectScanToCalibCloud(*msg_left, local_p_left, left_calib_cloud);
+        publish_cloud(pub_left_calib_, left_calib_cloud);
+    }
+    if (enable_right) {
+        projectScanToCalibCloud(*msg_right, local_p_right, right_calib_cloud);
+        publish_cloud(pub_right_calib_, right_calib_cloud);
+    }
+
+    if (use_left_for_single) {
+        projectScanToCloud(scan_left_copy, local_p_left, active_profile.f_left, left_ang_cloud);
+        publish_cloud(pub_left_ang_, left_ang_cloud);
+    }
+    if (use_right_for_single) {
+        projectScanToCloud(scan_right_copy, local_p_right, active_profile.f_right, right_ang_cloud);
+        publish_cloud(pub_right_ang_, right_ang_cloud);
+    }
+
+    if (!left_ang_cloud->empty()) *combined_2d_raw += *left_ang_cloud;
+    if (!right_ang_cloud->empty()) *combined_2d_raw += *right_ang_cloud;
 
     // 5. 统一执行 2D 去噪
     static SingleLineNoiseFilter unified_2d_noise_filter;
@@ -679,8 +782,7 @@ void callback(const sensor_msgs::PointCloud2::ConstPtr &msg_16,
         *final_output += *buf_main.filt; 
         *final_output += *buf_mid.filt; 
         
-        // 使用配置字典中的单线雷达开关
-        if (active_profile.enable_single_lidar) {
+        if (use_left_for_single || use_right_for_single) {
             *final_output += *buf_left.filt; 
         }
         
@@ -703,13 +805,6 @@ void callback(const sensor_msgs::PointCloud2::ConstPtr &msg_16,
     }
 
     // 9. 发布其他调试话题
-    auto publish_cloud = [&](ros::Publisher& pub, const pcl::PointCloud<pcl::PointXYZI>::Ptr& cloud) {
-        if (pub.getNumSubscribers() > 0 && !cloud->empty()) { 
-            sensor_msgs::PointCloud2 m; pcl::toROSMsg(*cloud, m);
-            m.header = msg_16->header; m.header.frame_id = parent_frame_; pub.publish(m);
-        }
-    };
-
     publish_cloud(pub_16_filter_, buf_main.filt);
     publish_cloud(pub_mid_filter_, buf_mid.filt);
     publish_cloud(pub_left_filter_, buf_left.filt);
@@ -823,6 +918,8 @@ int main(int argc, char **argv) {
     pub_car_marker_   = nh.advertise<visualization_msgs::MarkerArray>("car", 1, true);
     pub_debug_origins_ = nh.advertise<visualization_msgs::MarkerArray>("debug/sensor_origins", 1, true);
     pub_charge_polygon_marker_ = nh.advertise<visualization_msgs::MarkerArray>("charge", 10);
+    pub_left_ang_ = nh.advertise<PointCloud2>("points_left_ang", 5);
+    pub_right_ang_ = nh.advertise<PointCloud2>("points_right_ang", 5);
 
     ros::Subscriber sub_can = nh.subscribe("/can_info", 10, &canInfoCallback);
     

@@ -19,7 +19,10 @@
     <arg name="out_filter_mid" default="/points_mid_filter" />
     <arg name="out_filter_left" default="/scan_left_filter" />
     <arg name="out_filter_right" default="/scan_right_filter" />
+    <arg name="out_left_ang" default="/points_left_ang" />
+    <arg name="out_right_ang" default="/points_right_ang" />
 
+    <arg name="out_calib_main" default="/points_16_calibration" />
     <arg name="out_calib_mid" default="/points_mid_calibration" />
     <arg name="out_calib_left" default="/points_left_calibration" />
     <arg name="out_calib_right" default="/points_right_calibration" />
@@ -43,9 +46,12 @@
         <remap from="points_mid_filter" to="$(arg out_filter_mid)" />
         <remap from="scan_left_filter" to="$(arg out_filter_left)" />
         <remap from="scan_right_filter" to="$(arg out_filter_right)" />
+        <remap from="points_left_ang" to="$(arg out_left_ang)" />
+        <remap from="points_right_ang" to="$(arg out_right_ang)" />
 
+        <remap from="points_16_calibration" to="$(arg out_calib_main)" />
         <remap from="points_mid_calibration" to="$(arg out_calib_mid)" />
-        <remap from="scan_left_calibration" to="$(arg out_calib_left)" />
-        <remap from="scan_right_calibration" to="$(arg out_calib_right)" />
+        <remap from="points_left_calibration" to="$(arg out_calib_left)" />
+        <remap from="points_right_calibration" to="$(arg out_calib_right)" />
     </node>
 </launch>
