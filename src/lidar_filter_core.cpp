@@ -59,6 +59,10 @@ void LidarFilterCore::updateNativeConfig(const NativeFilterConfig& config) {
     charge_enble_ = config.charge_enble;
 }
 
+void LidarFilterCore::updateVehiclePolygon(const std::vector<geometry_msgs::Point>& polygon) {
+    // 可以在这里做一些预处理，比如计算包围盒
+}
+
 /**
  * @brief 简化版 Scan 过滤器：只保留 [min_deg, max_deg] 范围内的点
  * @param scan 输入的激光扫描数据（会被修改）

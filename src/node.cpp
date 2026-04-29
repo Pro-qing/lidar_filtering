@@ -66,6 +66,13 @@ autoware_can_msgs::CANInfo can_info_;
 // 调试模式开关，开启后会打印日志并发布调试Marker
 bool debug_mode_ = false;
 
+// 原始标定点云缓存（用于异步合并发布 /points_raw）
+std::mutex raw_cloud_mutex_;
+pcl::PointCloud<pcl::PointXYZI>::Ptr raw_main_calib_cache_(new pcl::PointCloud<pcl::PointXYZI>());
+pcl::PointCloud<pcl::PointXYZI>::Ptr raw_mid_calib_cache_(new pcl::PointCloud<pcl::PointXYZI>());
+pcl::PointCloud<pcl::PointXYZI>::Ptr raw_left_calib_cache_(new pcl::PointCloud<pcl::PointXYZI>());
+pcl::PointCloud<pcl::PointXYZI>::Ptr raw_right_calib_cache_(new pcl::PointCloud<pcl::PointXYZI>());
+
 // 速度限制相关参数
 double maxSpeed = 1.2, maxLimitDis_speed = 0.5;
 double leftLimit_min = 0, leftLimit_max = 0, rightLimit_min = 0, rightLimit_max = 0;
@@ -749,6 +756,14 @@ void callback(const sensor_msgs::PointCloud2::ConstPtr &msg_16,
         projectScanToCalibCloud(*msg_right, local_p_right, right_calib_cloud);
         publish_cloud(pub_right_calib_, right_calib_cloud);
     }
+
+    // 原始点云输出：四路雷达原始数据经标定后直接合并发布
+    g_merged_raw->clear();
+    if (enable_main && !buf_main.calib->empty()) *g_merged_raw += *buf_main.calib;
+    if (enable_top && !buf_mid.calib->empty()) *g_merged_raw += *buf_mid.calib;
+    if (enable_left && !left_calib_cloud->empty()) *g_merged_raw += *left_calib_cloud;
+    if (enable_right && !right_calib_cloud->empty()) *g_merged_raw += *right_calib_cloud;
+    publish_cloud(pub_points_raw, g_merged_raw);
 
     if (use_left_for_single) {
         projectScanToCloud(scan_left_copy, local_p_left, active_profile.f_left, left_ang_cloud);
