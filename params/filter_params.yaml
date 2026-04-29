@@ -33,7 +33,7 @@ regions:
 
   left:
     enable: 1
-    max_dis: 1.5
+    max_dis: 2.2
     a: 0.0
     b: 180.0
     c: 0.0
@@ -41,7 +41,7 @@ regions:
 
   right:
     enable: 1
-    max_dis: 1.5
+    max_dis: 2.2
     a: 180.0
     b: 360.0
     c: 0.0
@@ -58,22 +58,22 @@ speed_limits:
 
 # 核心滤波参数 (点云降采样与空间剪裁)
 core:
-  crop_radius: 8.0
-  crop_radius_x: 5.0
-  height_max: 0.0
-  height_min: -1.85
-  height_filt: -5.0
-  filter_floor: true
-  voxel_filter: 0.1
-  voxel_filter_auto: false
-  voxel_filter_eleva: 0.1
-  filter_transient: true
-  neighboring_points: 10
-  stand_threshold: 0.8
-  time_consistency_filter: true
-  radius_enble: true
-  radius_radius: 0.15
-  radius_min_neighbors: 2
+  crop_radius: 10.0             #XY平面保留半径（米），越大点越多。
+  crop_radius_x: 3.0            #裁剪圆心X偏移（前向拉长视野）
+  height_max: 0.3               #Z轴高度上限（米），适当放宽以保留更多高处点云
+  height_min: -2.10             #Z轴高度下限（米），适当放宽以保留更多低处点云
+  height_filt: -5.0             #地面附加高度阈值（与 filter_floor 配合）。
+  filter_floor: true            #是否开启地面滤除
+  voxel_filter: 0.08            #体素降采样粒度（米），越小点越多。
+  voxel_filter_auto: false      #是否自动调整体素滤波粒度（根据点云密度动态调整，保持稳定的点数输出）
+  voxel_filter_eleva: 0.05      #电梯模式体素粒度（/lqr_dire 触发）。
+  filter_transient: true        #预留，当前未实际使用。
+  neighboring_points: 10        #半径滤波邻居点数阈值，越大越严格。预留，当前未实际使用。
+  stand_threshold: 0.8          #静止点占比阈值，越大越严格。预留，当前未实际使用。
+  time_consistency_filter: true #当前主要用于“是否更新历史缓存”，未做完整时序差分剔除。
+  radius_enble: true            #半径离群点滤波开关（主要作用在PCL路径）。
+  radius_radius: 0.12           #离群滤波搜索半径（米），越大越宽松。
+  radius_min_neighbors: 1       #离群滤波最小邻居点数，越小越宽松。
   charge_enble: true
   charge_length: 1.2
   charge_wide: 1.2
@@ -83,7 +83,7 @@ core:
   consistency_min_angle: -20.0
   consistency_max_angle: 20.0
   consistency_diff_dist: 0.5
-  vehicle_height: 1.0
+  vehicle_height: 1.0           #车体过滤时的高度上限。
 
 # 兼容字段: 双雷达一致性校验
 consistency:
@@ -115,10 +115,10 @@ behaviors:
       left: false
       right: false
     regions:
-      main: { enable: 0, min_angle: 0.0, max_angle: 360.0, max_dis: 0.0, a: 0.0, b: 360.0, c: 0.0, d: 360.0 }
+      main: { enable: 1, min_angle: 0.0, max_angle: 360.0, max_dis: 0.0, a: 0.0, b: 360.0, c: 0.0, d: 360.0 }
       top: { enable: 1, min_angle: 0.0, max_angle: 360.0, max_dis: 0.0, a: 0.0, b: 360.0, c: 0.0, d: 360.0 }
-      left: { enable: 1, max_dis: 1.5, a: 0.0, b: 180.0, c: 0.0, d: 0.0 }
-      right: { enable: 1, max_dis: 1.5, a: 180.0, b: 360.0, c: 0.0, d: 0.0 }
+      left: { enable: 1, max_dis: 2.2, a: 0.0, b: 180.0, c: 0.0, d: 0.0 }
+      right: { enable: 1, max_dis: 2.2, a: 180.0, b: 360.0, c: 0.0, d: 0.0 }
     core:
       crop_radius: 4.0
       crop_radius_x: 5.0
@@ -158,18 +158,18 @@ behaviors:
       left: true
       right: true
     regions:
-      main: { enable: 0, min_angle: 0.0, max_angle: 360.0, max_dis: 0.0, a: 0.0, b: 360.0, c: 0.0, d: 360.0 }
+      main: { enable: 1, min_angle: 0.0, max_angle: 360.0, max_dis: 0.0, a: 0.0, b: 360.0, c: 0.0, d: 360.0 }
       top: { enable: 1, min_angle: 0.0, max_angle: 360.0, max_dis: 0.0, a: 0.0, b: 360.0, c: 0.0, d: 360.0 }
-      left: { enable: 1, max_dis: 1.5, a: 0.0, b: 180.0, c: 0.0, d: 0.0 }
-      right: { enable: 1, max_dis: 1.5, a: 180.0, b: 360.0, c: 0.0, d: 0.0 }
+      left: { enable: 1, max_dis: 2.2, a: 0.0, b: 180.0, c: 0.0, d: 0.0 }
+      right: { enable: 1, max_dis: 2.2, a: 180.0, b: 360.0, c: 0.0, d: 0.0 }
     core:
-      crop_radius: 6.0
+      crop_radius: 8.0
       crop_radius_x: 5.0
-      height_max: 0.0
-      height_min: -1.85
+      height_max: 0.3
+      height_min: -2.10
       height_filt: -5.0
       filter_floor: true
-      voxel_filter: 0.1
+      voxel_filter: 0.08
       voxel_filter_auto: false
       voxel_filter_eleva: 0.1
       filter_transient: true
@@ -177,8 +177,8 @@ behaviors:
       stand_threshold: 0.8
       time_consistency_filter: true
       radius_enble: true
-      radius_radius: 0.15
-      radius_min_neighbors: 2
+      radius_radius: 0.12
+      radius_min_neighbors: 1
       charge_enble: true
       charge_length: 1.2
       charge_wide: 1.2
@@ -201,18 +201,18 @@ behaviors:
       left: true
       right: true
     regions:
-      main: { enable: 0, min_angle: 0.0, max_angle: 360.0, max_dis: 0.0, a: 0.0, b: 360.0, c: 0.0, d: 360.0 }
+      main: { enable: 1, min_angle: 0.0, max_angle: 360.0, max_dis: 0.0, a: 0.0, b: 360.0, c: 0.0, d: 360.0 }
       top: { enable: 1, min_angle: 0.0, max_angle: 360.0, max_dis: 0.0, a: 0.0, b: 360.0, c: 0.0, d: 360.0 }
-      left: { enable: 1, max_dis: 1.0, a: 0.0, b: 180.0, c: 0.0, d: 0.0 }
-      right: { enable: 1, max_dis: 1.0, a: 180.0, b: 360.0, c: 0.0, d: 0.0 }
+      left: { enable: 1, max_dis: 1.4, a: 0.0, b: 180.0, c: 0.0, d: 0.0 }
+      right: { enable: 1, max_dis: 1.4, a: 180.0, b: 360.0, c: 0.0, d: 0.0 }
     core:
-      crop_radius: 8.0
+      crop_radius: 9.0
       crop_radius_x: 3.0
-      height_max: 0.0
-      height_min: -1.85
+      height_max: 0.3
+      height_min: -2.10
       height_filt: -5.0
       filter_floor: true
-      voxel_filter: 0.1
+      voxel_filter: 0.08
       voxel_filter_auto: false
       voxel_filter_eleva: 0.1
       filter_transient: true
@@ -220,8 +220,8 @@ behaviors:
       stand_threshold: 0.8
       time_consistency_filter: true
       radius_enble: true
-      radius_radius: 0.15
-      radius_min_neighbors: 2
+      radius_radius: 0.12
+      radius_min_neighbors: 1
       charge_enble: true
       charge_length: 1.2
       charge_wide: 1.2
@@ -244,18 +244,18 @@ behaviors:
       left: true
       right: true
     regions:
-      main: { enable: 0, min_angle: 0.0, max_angle: 360.0, max_dis: 0.0, a: 0.0, b: 360.0, c: 0.0, d: 360.0 }
+      main: { enable: 1, min_angle: 0.0, max_angle: 360.0, max_dis: 0.0, a: 0.0, b: 360.0, c: 0.0, d: 360.0 }
       top: { enable: 1, min_angle: 0.0, max_angle: 360.0, max_dis: 0.0, a: 0.0, b: 360.0, c: 0.0, d: 360.0 }
-      left: { enable: 1, max_dis: 1.5, a: 0.0, b: 180.0, c: 0.0, d: 0.0 }
-      right: { enable: 1, max_dis: 1.5, a: 180.0, b: 360.0, c: 0.0, d: 0.0 }
+      left: { enable: 1, max_dis: 2.2, a: 0.0, b: 180.0, c: 0.0, d: 0.0 }
+      right: { enable: 1, max_dis: 2.2, a: 180.0, b: 360.0, c: 0.0, d: 0.0 }
     core:
-      crop_radius: 8.0
+      crop_radius: 10.0
       crop_radius_x: 5.0
-      height_max: 0.0
-      height_min: -1.85
+      height_max: 0.3
+      height_min: -2.10
       height_filt: -5.0
       filter_floor: true
-      voxel_filter: 0.1
+      voxel_filter: 0.08
       voxel_filter_auto: false
       voxel_filter_eleva: 0.1
       filter_transient: true
@@ -263,8 +263,8 @@ behaviors:
       stand_threshold: 0.8
       time_consistency_filter: true
       radius_enble: true
-      radius_radius: 0.15
-      radius_min_neighbors: 2
+      radius_radius: 0.12
+      radius_min_neighbors: 1
       charge_enble: true
       charge_length: 1.2
       charge_wide: 1.2
@@ -277,3 +277,18 @@ behaviors:
       vehicle_height: 1.0
     consistency: { enable: false, min_angle: -20.0, max_angle: 20.0, diff_dist: 0.5 }
     charge: { enble: true, length: 1.2, wide: 1.2, high: 1.2, error: 1.2 }
+
+
+# ==========================================
+# 新增: 点数放宽参数说明 (2026-04-29)
+# 说明:
+# 1) 这些参数已经同步到上面的 base 与 behaviors 中
+# 2) 如果点数仍偏少, 可以继续按以下方向微调
+# ==========================================
+relax_param_notes:
+  main_enable: "regions.main.enable 建议保持 1, 否则主雷达不会进入滤波输出"
+  single_max_dis: "regions.left/right.max_dis 从 1.5 提高到 2.2 (行为5为1.4), 增加单线远端点"
+  crop_radius: "core.crop_radius 从 8.0 提高到 10.0 (行为按场景调整到 8.0/9.0/10.0)"
+  height_window: "core.height_max 从 0.0 放宽到 0.3, core.height_min 从 -1.9 放宽到 -2.1"
+  voxel_leaf: "core.voxel_filter 从 0.1 降到 0.08, 保留更多细节点"
+  radius_outlier: "core.radius_radius 从 0.15 降到 0.12, core.radius_min_neighbors 从 2 降到 1, 减少误删"
