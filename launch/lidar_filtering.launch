@@ -19,6 +19,7 @@
     <arg name="out_filter_mid" default="/points_mid_filter" />
     <arg name="out_filter_left" default="/scan_left_filter" />
     <arg name="out_filter_right" default="/scan_right_filter" />
+    <arg name="out_points_raw" default="/points_raw" />
     <arg name="out_left_ang" default="/points_left_ang" />
     <arg name="out_right_ang" default="/points_right_ang" />
 
@@ -46,6 +47,7 @@
         <remap from="points_mid_filter" to="$(arg out_filter_mid)" />
         <remap from="scan_left_filter" to="$(arg out_filter_left)" />
         <remap from="scan_right_filter" to="$(arg out_filter_right)" />
+        <remap from="points_raw" to="$(arg out_points_raw)" />
         <remap from="points_left_ang" to="$(arg out_left_ang)" />
         <remap from="points_right_ang" to="$(arg out_right_ang)" />
 
