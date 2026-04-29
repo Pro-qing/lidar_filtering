@@ -63,8 +63,8 @@ target_link_libraries(lidar_filter_core
   ${PCL_LIBRARIES}
   OpenMP::OpenMP_CXX
 )
-# （已删除 add_dependencies(lidar_filter_core ${PROJECT_NAME}_gencfg)）
 
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O3 -fopenmp")
 
 # 主节点
 add_executable(multi_points src/node.cpp)
