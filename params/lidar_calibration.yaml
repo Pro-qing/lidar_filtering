@@ -13,20 +13,20 @@ tf_calibration:
   top_y: -0.004
   top_z: -0.36
   top_yaw: 0.0
-  top_pitch: 0.0
+  top_pitch: 0.18
   top_roll: 3.1415926
   # 左前单线
   left_x: 0.25
   left_y: 0.35
   left_z: -1.75
-  left_yaw: -0.54
+  left_yaw: 0.98
   left_pitch: 3.1415926
   left_roll: 0.0
   # 右前单线
   right_x: 0.21
   right_y: -0.36
   right_z: -1.75
-  right_yaw: 0.54
+  right_yaw: -0.95
   right_pitch: 3.1415926
   right_roll: 0.0
   # 左后单线

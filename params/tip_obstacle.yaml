@@ -1,0 +1,53 @@
+# ==========================================
+# 1. 运行状态与阈值配置
+# ==========================================
+timeouts:
+  state_timeout: 2.0                 # 倒车/入库状态的维持时间(秒)
+  tf_timeout: 0.05                   # TF变换等待的超时时间(秒)
+
+thresholds:
+  reverse_velocity: -0.01            # 触发倒车状态的速度阈值(m/s)
+  forward_velocity: 0.2              # 解除倒车状态的向前速度阈值(m/s)
+  valid_distance_min: 0.01           # 判定为有效库位距离的最小值(m)
+  carport_activation_dist: 5.0       # 激活库位长廊裁剪的最大距离(m)
+  max_detect_distance: 255.0         # 测距最大初始化值(m)
+
+# 允许触发库位长廊逻辑的任务类型列表 (如: 0, 1, 2)
+valid_task_types: [0, 1, 2]
+
+# ==========================================
+# 2. RViz 可视化(Marker)配置
+# ==========================================
+visualization:
+  marker_line_width: 0.05
+  marker_color_r: 0.0
+  marker_color_g: 1.0
+  marker_color_b: 0.0
+  marker_color_a: 1.0
+
+# ==========================================
+# 3. 盲区过滤配置 (1:开启 0:关闭)
+# ==========================================
+normal_filter:
+  left_filter_enable: 1
+  left_min_angle: 15.0
+  left_max_angle: 345.0
+  left_min_y: 0.40
+  left_max_y: 0.00
+  right_filter_enable: 1
+  right_min_angle: 15.0
+  right_max_angle: 345.0
+  right_min_y: 0.00
+  right_max_y: -0.40
+
+pallet_id_filter:
+  pallet_id_left_filter_enable: 1
+  pallet_id_left_min_angle: 15.0
+  pallet_id_left_max_angle: 355.0
+  pallet_id_left_min_y: 0.30
+  pallet_id_left_max_y: 0.00
+  pallet_id_right_filter_enable: 1
+  pallet_id_right_min_angle: 15.0
+  pallet_id_right_max_angle: 355.0
+  pallet_id_right_min_y: 0.00
+  pallet_id_right_max_y: -0.30
