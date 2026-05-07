@@ -144,6 +144,13 @@ public:
      */
     void checkScanConsistency(sensor_msgs::LaserScan& left, sensor_msgs::LaserScan& right, 
                               double left_yaw, double right_yaw);
+                              
+    /**
+     * @brief 预留接口
+     * @param 
+     * @return 
+     */
+    void updateVehiclePolygon(const std::vector<geometry_msgs::Point>& polygon);
 
     /**
      * @brief 生成车辆模型的RViz可视化Marker
