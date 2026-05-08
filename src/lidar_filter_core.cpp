@@ -2,7 +2,7 @@
 
 // 禁用PCL预编译头，以避免链接时可能出现的问题
 #ifndef PCL_NO_PRECOMPILE
-#define PCL_NO_PRECOMPILE 
+#define PCL_NO_PRECOMPILE
 #endif
 
 // ==================== PCL滤波器库引入 ====================
