@@ -516,25 +516,21 @@ void LidarFilterCore::pointcloud_filter_pcl(pcl::PointCloud<pcl::PointXYZI>::Ptr
  * 
  * 如果启用了充电站过滤且缓存有效，则移除位于充电站区域内的点。
  */
-void LidarFilterCore::filterChargingStation(pcl::PointCloud<pcl::PointXYZI>::Ptr cloud_ptr)
-{
+void LidarFilterCore::filterChargingStation(pcl::PointCloud<pcl::PointXYZI>::Ptr cloud_ptr) {
     if (!charge_enble_ || fliter_charge_ == 0 || cloud_ptr->empty()) return;
-
-    // 更新充电站缓存（基于当前位姿）
     updateChargeCache(transPose_);
-    
-    // 原地过滤：保留不在充电站区域的点
-    size_t write_index = 0;
-    for (size_t i = 0; i < cloud_ptr->size(); ++i) {
-        if (!isPointInChargeArea(cloud_ptr->points[i])) {
-            cloud_ptr->points[write_index++] = cloud_ptr->points[i];
-        }
+
+    // 使用 STL 算法，安全且高效
+    auto it = std::remove_if(cloud_ptr->points.begin(), cloud_ptr->points.end(),
+        [this](const pcl::PointXYZI& pt) {
+            return isPointInChargeArea(pt);
+        });
+
+    if (it != cloud_ptr->points.end()) {
+        cloud_ptr->points.erase(it, cloud_ptr->points.end());
+        cloud_ptr->width = cloud_ptr->points.size();
+        cloud_ptr->height = 1;
     }
-    
-    // 调整点云大小
-    cloud_ptr->points.resize(write_index);
-    cloud_ptr->width = cloud_ptr->points.size();
-    cloud_ptr->height = 1;
 }
 
 /**

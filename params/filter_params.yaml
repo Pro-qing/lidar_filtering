@@ -71,10 +71,10 @@ core:
   neighboring_points: 10        #半径滤波邻居点数阈值，越大越严格。预留，当前未实际使用。
   stand_threshold: 0.8          #静止点占比阈值，越大越严格。预留，当前未实际使用。
   time_consistency_filter: true #当前主要用于“是否更新历史缓存”，未做完整时序差分剔除。
-  radius_enble: true            #半径离群点滤波开关（主要作用在PCL路径）。
+  radius_enable: true            #半径离群点滤波开关（主要作用在PCL路径）。
   radius_radius: 0.12           #离群滤波搜索半径（米），越大越宽松。
   radius_min_neighbors: 1       #离群滤波最小邻居点数，越小越宽松。
-  charge_enble: true
+  charge_enable: true
   charge_length: 1.2
   charge_wide: 1.2
   charge_high: 1.2
@@ -94,7 +94,7 @@ consistency:
 
 # 兼容字段: 充电桩识别参数
 charge:
-  enble: true
+  enable: true
   length: 1.2
   wide: 1.2
   high: 1.2
@@ -133,10 +133,10 @@ behaviors:
       neighboring_points: 10
       stand_threshold: 0.8
       time_consistency_filter: true
-      radius_enble: true
+      radius_enable: true
       radius_radius: 0.15
       radius_min_neighbors: 2
-      charge_enble: true
+      charge_enable: true
       charge_length: 1.2
       charge_wide: 1.2
       charge_high: 1.2
@@ -147,7 +147,7 @@ behaviors:
       consistency_diff_dist: 0.5
       vehicle_height: 1.0
     consistency: { enable: false, min_angle: -20.0, max_angle: 20.0, diff_dist: 0.5 }
-    charge: { enble: true, length: 1.2, wide: 1.2, high: 1.2, error: 1.2 }
+    charge: { enable: true, length: 1.2, wide: 1.2, high: 1.2, error: 1.2 }
 
   # Behavior 2: 充电相关模式
   2:
@@ -176,10 +176,10 @@ behaviors:
       neighboring_points: 10
       stand_threshold: 0.8
       time_consistency_filter: true
-      radius_enble: true
+      radius_enable: true
       radius_radius: 0.12
       radius_min_neighbors: 1
-      charge_enble: true
+      charge_enable: true
       charge_length: 1.2
       charge_wide: 1.2
       charge_high: 1.2
@@ -190,7 +190,7 @@ behaviors:
       consistency_diff_dist: 0.5
       vehicle_height: 1.0
     consistency: { enable: true, min_angle: -20.0, max_angle: 20.0, diff_dist: 0.5 }
-    charge: { enble: true, length: 1.2, wide: 1.2, high: 1.2, error: 1.2 }
+    charge: { enable: true, length: 1.2, wide: 1.2, high: 1.2, error: 1.2 }
 
   # Behavior 5: 近距离防撞收缩模式
   5:
@@ -219,10 +219,10 @@ behaviors:
       neighboring_points: 10
       stand_threshold: 0.8
       time_consistency_filter: true
-      radius_enble: true
+      radius_enable: true
       radius_radius: 0.12
       radius_min_neighbors: 1
-      charge_enble: true
+      charge_enable: true
       charge_length: 1.2
       charge_wide: 1.2
       charge_high: 1.2
@@ -233,7 +233,7 @@ behaviors:
       consistency_diff_dist: 0.5
       vehicle_height: 1.0
     consistency: { enable: false, min_angle: -20.0, max_angle: 20.0, diff_dist: 0.5 }
-    charge: { enble: true, length: 1.2, wide: 1.2, high: 1.2, error: 1.2 }
+    charge: { enable: true, length: 1.2, wide: 1.2, high: 1.2, error: 1.2 }
 
   # Behavior 6: 行人残影抑制模式
   6:
@@ -262,10 +262,10 @@ behaviors:
       neighboring_points: 10
       stand_threshold: 0.8
       time_consistency_filter: true
-      radius_enble: true
+      radius_enable: true
       radius_radius: 0.12
       radius_min_neighbors: 1
-      charge_enble: true
+      charge_enable: true
       charge_length: 1.2
       charge_wide: 1.2
       charge_high: 1.2
@@ -276,7 +276,7 @@ behaviors:
       consistency_diff_dist: 0.5
       vehicle_height: 1.0
     consistency: { enable: false, min_angle: -20.0, max_angle: 20.0, diff_dist: 0.5 }
-    charge: { enble: true, length: 1.2, wide: 1.2, high: 1.2, error: 1.2 }
+    charge: { enable: true, length: 1.2, wide: 1.2, high: 1.2, error: 1.2 }
 
 
 # ==========================================
