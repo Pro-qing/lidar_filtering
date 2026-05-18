@@ -56,7 +56,7 @@ LidarFilterCore::LidarFilterCore(ros::NodeHandle &nh, ros::NodeHandle &private_n
 void LidarFilterCore::updateNativeConfig(const NativeFilterConfig& config) {
     std::lock_guard<std::mutex> lock(core_param_mutex_);
     config_ = config;
-    charge_enble_ = config.charge_enble;
+    charge_enable_ = config.charge_enable;
 }
 
 void LidarFilterCore::updateVehiclePolygon(const std::vector<geometry_msgs::Point>& polygon) {
@@ -286,7 +286,7 @@ void LidarFilterCore::pointcloud_filter(pcl::PointCloud<pcl::PointXYZI>::Ptr in_
     {
         std::lock_guard<std::mutex> lock(core_param_mutex_);
         local_cfg = config_;
-        charge_active = charge_enble_ && charge_cache_.valid;
+        charge_active = charge_enable_ && charge_cache_.valid;
     }
 
     // 预计算半径平方，避免在循环中重复开方
@@ -417,7 +417,7 @@ void LidarFilterCore::pointcloud_filter_pcl(pcl::PointCloud<pcl::PointXYZI>::Ptr
     // Stage 2: 体素降采样
     {
         // 根据是否启用电梯模式选择不同的体素大小
-        double leaf_size = enbleElevator_ ? local_cfg.voxel_filter_eleva : local_cfg.voxel_filter;
+        double leaf_size = enableElevator_ ? local_cfg.voxel_filter_eleva : local_cfg.voxel_filter;
         if(leaf_size < 0.02) leaf_size = 0.02; // 最小体素限制
         pcl::VoxelGrid<pcl::PointXYZI> vg;
         vg.setInputCloud(tmp_cropped);
@@ -499,7 +499,7 @@ void LidarFilterCore::pointcloud_filter_pcl(pcl::PointCloud<pcl::PointXYZI>::Ptr
     }
 
     // Stage 4: 半径离群点移除
-    if (local_cfg.radius_enble && !tmp_nonground->empty()) {
+    if (local_cfg.radius_enable && !tmp_nonground->empty()) {
         pcl::RadiusOutlierRemoval<pcl::PointXYZI> outrem;
         outrem.setInputCloud(tmp_nonground);
         outrem.setRadiusSearch(local_cfg.radius_radius);
@@ -517,7 +517,7 @@ void LidarFilterCore::pointcloud_filter_pcl(pcl::PointCloud<pcl::PointXYZI>::Ptr
  * 如果启用了充电站过滤且缓存有效，则移除位于充电站区域内的点。
  */
 void LidarFilterCore::filterChargingStation(pcl::PointCloud<pcl::PointXYZI>::Ptr cloud_ptr) {
-    if (!charge_enble_ || fliter_charge_ == 0 || cloud_ptr->empty()) return;
+    if (!charge_enable_ || fliter_charge_ == 0 || cloud_ptr->empty()) return;
     updateChargeCache(transPose_);
 
     // 使用 STL 算法，安全且高效
@@ -860,11 +860,11 @@ void LidarFilterCore::keyPointCallback(const autoware_msgs::KeyPointArrayConstPt
  * 4: 电梯模式
  */
 void LidarFilterCore::ctrolCallback(const std_msgs::Int8ConstPtr &msg) {
-    if(charge_enble_ && msg->data == 2) fliter_charge_ = 1; // 充电中
-    else if(charge_enble_ && msg->data < 0) fliter_charge_ = 2; // 充电结束
+    if(charge_enable_ && msg->data == 2) fliter_charge_ = 1; // 充电中
+    else if(charge_enable_ && msg->data < 0) fliter_charge_ = 2; // 充电结束
     else fliter_charge_ = 0; // 正常行驶
     
-    if(fabs(msg->data) == 4) enbleElevator_ = true; else enbleElevator_ = false; // 电梯模式切换
+    if(fabs(msg->data) == 4) enableElevator_ = true; else enableElevator_ = false; // 电梯模式切换
 }
 
 /**

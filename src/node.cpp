@@ -285,13 +285,13 @@ void reloadFilterParamsYaml(const std::string& filepath) {
             if (cr["voxel_filter_auto"]) cfg.voxel_filter_auto = cr["voxel_filter_auto"].as<bool>(cfg.voxel_filter_auto);
             if (cr["voxel_filter_eleva"]) cfg.voxel_filter_eleva = cr["voxel_filter_eleva"].as<double>(cfg.voxel_filter_eleva);
             if (cr["filter_transient"]) cfg.filter_transient = cr["filter_transient"].as<bool>(cfg.filter_transient);
-            if (cr["radius_enble"]) cfg.radius_enble = cr["radius_enble"].as<bool>(cfg.radius_enble);
+            if (cr["radius_enable"]) cfg.radius_enable = cr["radius_enable"].as<bool>(cfg.radius_enable);
             if (cr["radius_radius"]) cfg.radius_radius = cr["radius_radius"].as<double>(cfg.radius_radius);
             if (cr["radius_min_neighbors"]) cfg.radius_min_neighbors = cr["radius_min_neighbors"].as<int>(cfg.radius_min_neighbors);
             if (cr["neighboring_points"]) cfg.neighboring_points = cr["neighboring_points"].as<int>(cfg.neighboring_points);
             if (cr["stand_threshold"]) cfg.stand_threshold = cr["stand_threshold"].as<double>(cfg.stand_threshold);
             if (cr["time_consistency_filter"]) cfg.time_consistency_filter = cr["time_consistency_filter"].as<bool>(cfg.time_consistency_filter);
-            if (cr["charge_enble"]) cfg.charge_enble = cr["charge_enble"].as<bool>(cfg.charge_enble);
+            if (cr["charge_enable"]) cfg.charge_enable = cr["charge_enable"].as<bool>(cfg.charge_enable);
             if (cr["charge_length"]) cfg.charge_length = cr["charge_length"].as<double>(cfg.charge_length);
             if (cr["charge_wide"]) cfg.charge_wide = cr["charge_wide"].as<double>(cfg.charge_wide);
             if (cr["charge_high"]) cfg.charge_high = cr["charge_high"].as<double>(cfg.charge_high);
@@ -311,7 +311,7 @@ void reloadFilterParamsYaml(const std::string& filepath) {
         };
 
         auto parseCharge = [](const YAML::Node& cg, NativeFilterConfig& cfg) {
-            if(cg["enble"]) cfg.charge_enble = cg["enble"].as<bool>(cfg.charge_enble);
+            if(cg["enable"]) cfg.charge_enable = cg["enable"].as<bool>(cfg.charge_enable);
             if(cg["length"]) cfg.charge_length = cg["length"].as<double>(cfg.charge_length);
             if(cg["wide"]) cfg.charge_wide = cg["wide"].as<double>(cfg.charge_wide);
             if(cg["high"]) cfg.charge_high = cg["high"].as<double>(cfg.charge_high);

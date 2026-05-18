@@ -52,12 +52,12 @@ struct NativeFilterConfig {
     bool time_consistency_filter = true; // 是否启用时间一致性过滤（基于历史帧）
 
     // --- 半径离群点移除参数 ---
-    bool radius_enble = true;            // 是否启用半径滤波
+    bool radius_enable = true;            // 是否启用半径滤波
     double radius_radius = 0.15;         // 搜索半径（米）
     int radius_min_neighbors = 2;        // 最小邻居数，少于则视为离群点
 
     // --- 充电站区域过滤参数 ---
-    bool charge_enble = true;            // 是否启用充电站区域过滤
+    bool charge_enable = true;            // 是否启用充电站区域过滤
     double charge_length = 1.2;          // 充电站区域长度（米）
     double charge_wide = 1.2;            // 充电站区域宽度（米）
     double charge_high = 1.2;            // 充电站区域高度（米）
@@ -192,7 +192,7 @@ public:
     static void filterScanMsgDualInterval(sensor_msgs::LaserScan& scan, double a, double b, double c, double d, double max_dis, bool is_limit_mode = false, double limit_min_deg = 0, double limit_max_deg = 0, double limit_dis = 0.0);
 
     // --- 公共成员变量 ---
-    bool charge_enble_ = true;         // 充电站过滤开关
+    bool charge_enable_ = true;         // 充电站过滤开关
     std::atomic<int> fliter_charge_{0}; // 充电站过滤状态原子计数器
 
 private:
@@ -212,7 +212,7 @@ private:
     std::mutex core_param_mutex_;      // 保护核心参数的互斥锁
     NativeFilterConfig config_;        // 当前滤波配置
 
-    bool enbleElevator_ = false;      // 是否启用电梯模式（特殊场景）
+    bool enableElevator_ = false;      // 是否启用电梯模式（特殊场景）
 
     // ==================== 历史数据与缓存 ====================
     pcl::PointCloud<pcl::PointXYZI> prev_non_ground_cloud_; // 上一帧非地面点云（用于时间一致性）
